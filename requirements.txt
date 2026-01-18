@@ -1,0 +1,7 @@
+streamlit
+plotly
+numpy
+shapely>=2.0
+ezdxf
+pyclipper
+watchdog
