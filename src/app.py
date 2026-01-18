@@ -1,5 +1,5 @@
 import streamlit as st
-import viz
+import pit_viz as viz
 import data_loader
 
 st.set_page_config(
