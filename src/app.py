@@ -1,5 +1,6 @@
 import streamlit as st
 import viz
+import data_loader
 
 st.set_page_config(
     page_title="Open Pit Design PoC",
@@ -11,6 +12,9 @@ st.title("Open Pit Design Generator (PoC)")
 st.markdown("""
 This tool generates a pit design from an Ultimate Pit (UP) string.
 """)
+
+# Load UP string
+up_string = data_loader.get_sample_up_string()
 
 # Sidebar for inputs
 st.sidebar.header("Design Parameters")
@@ -50,7 +54,34 @@ target_elev = st.sidebar.number_input(
     help="Bottom elevation to reach"
 )
 
-# Placeholder for future inputs
+st.sidebar.markdown("---")
+st.sidebar.header("UP String Inspector")
+
+# Index selector
+num_points = len(up_string)
+# If closed loop, the last point is same as first.
+# Depending on how we want to visualize indices, we might exclude the duplicate last point in the index count,
+# or just let user select it. Usually "closed" means N vertices. The N+1 point is just closure.
+# Let's offer indices 0 to N-1 (unique points).
+unique_point_count = num_points - 1 if num_points > 1 and up_string[0] == up_string[-1] else num_points
+
+selected_index = st.sidebar.number_input(
+    "Highlight Point Index",
+    min_value=0,
+    max_value=unique_point_count - 1 if unique_point_count > 0 else 0,
+    value=0,
+    step=1
+)
+
+# Display coordinates of selected point
+if unique_point_count > 0:
+    sel_pt = up_string[selected_index]
+    st.sidebar.markdown(f"**Selected Point:**")
+    st.sidebar.code(f"X: {sel_pt[0]:.2f}\nY: {sel_pt[1]:.2f}\nZ: {sel_pt[2]:.2f}")
+else:
+    st.sidebar.warning("No points in UP string")
+
+
 st.sidebar.markdown("---")
 st.sidebar.header("Data Import (Placeholder)")
 st.sidebar.info("DXF Topography and UP String import will be implemented in future phases.")
@@ -59,8 +90,8 @@ st.sidebar.info("DXF Topography and UP String import will be implemented in futu
 st.subheader("3D Visualization")
 
 # Create and display the plot
-fig = viz.create_empty_3d_figure()
-st.plotly_chart(fig)
+fig = viz.plot_pit_data(up_string, selected_index)
+st.plotly_chart(fig, use_container_width=True)
 
 # Debug/Diagnostics section
 with st.expander("Diagnostics & Data"):
@@ -68,3 +99,5 @@ with st.expander("Diagnostics & Data"):
     st.write(f"Batter Angle: {batter_angle} deg")
     st.write(f"Berm Width: {berm_width} m")
     st.write(f"Target Elevation: {target_elev} m")
+    st.write(f"UP String Points: {len(up_string)}")
+    st.write(f"Closed Loop: {up_string[0] == up_string[-1]}")
