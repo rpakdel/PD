@@ -89,10 +89,10 @@ if use_variable_params:
 
     # Default data for the editor
     default_data = {
-        "Min Elev": [100.0, 125.0, 150.0, 175.0],
-        "Max Elev": [125.0, 150.0, 175.0, 200.0],
-        "Angle (deg)": [75.0, 80.0, 85.0, 90.0],
-        "Width (m)": [10.0, 15.0, 20.0, 5.0]
+        "Min Elev": [0, 100.0, 125.0, 150.0, 175.0],
+        "Max Elev": [100, 125.0, 150.0, 175.0, 200.0],
+        "Angle (deg)": [70, 75.0, 80.0, 85.0, 90.0],
+        "Width (m)": [8, 10.0, 15.0, 20.0, 5.0]
     }
 
     edited_df = st.sidebar.data_editor(
