@@ -31,13 +31,18 @@ bench_height = st.sidebar.number_input(
     help="Vertical height of each bench"
 )
 
+# Checkbox for variable params (Moved up to control visibility/state of other inputs)
+use_variable_params = st.sidebar.checkbox("Use Elevation-based Parameters", value=False)
+
+# Uniform parameters - disabled if variable params are used
 batter_angle = st.sidebar.number_input(
     "Batter Angle (deg)",
     min_value=10.0,
     max_value=89.0,
     value=75.0,
     step=1.0,
-    help="Face angle (from horizontal)"
+    help="Face angle (from horizontal)",
+    disabled=use_variable_params
 )
 
 berm_width = st.sidebar.number_input(
@@ -46,7 +51,8 @@ berm_width = st.sidebar.number_input(
     max_value=50.0,
     value=5.0,
     step=0.5,
-    help="Width of the catch berm"
+    help="Width of the catch berm",
+    disabled=use_variable_params
 )
 
 design_direction = st.sidebar.radio(
@@ -75,7 +81,6 @@ target_elev = st.sidebar.number_input(
 )
 
 st.sidebar.markdown("---")
-use_variable_params = st.sidebar.checkbox("Use Elevation-based Parameters", value=False)
 variable_params_list = []
 
 if use_variable_params:
@@ -179,7 +184,10 @@ with st.expander("Diagnostics & Data"):
     if st.session_state.get('diagnostics'):
         st.write("---")
         st.write("Generation Diagnostics:")
-        st.json(st.session_state['diagnostics'])
+        diag = st.session_state['diagnostics']
+        if "error" in diag:
+            st.error(f"Generation Error: {diag['error']}")
+        st.json(diag)
 
     if st.session_state.get('benches'):
         st.write(f"Generated {len(st.session_state['benches'])} benches")

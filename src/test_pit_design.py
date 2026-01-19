@@ -2,7 +2,7 @@ import pytest
 import math
 import shapely.geometry as sg
 from pit_design import inset_polygon, generate_pit_benches
-from design_params import PitDesignParams, Mesh3D
+from design_params import PitDesignParams, Mesh3D, DesignBlock
 
 def test_inset_polygon():
     # Simple square 10x10
@@ -169,3 +169,57 @@ def test_generate_pit_benches_upward_simple():
     b1 = benches[0]
     # Check areas to ensure expansion
     assert b1.crest_polys[0].area > b1.toe_polys[0].area
+
+def test_generate_pit_missing_variable_params_strictness():
+    # Test strict mode for variable params
+    points = [(0,0,100), (100,0,100), (100,100,100), (0,100,100)]
+
+    # Define range 0-50 only
+    var_params = [DesignBlock(0, 50, 10.0, 5.0)]
+
+    params = PitDesignParams(
+        bench_height=10.0,
+        batter_angle_deg=75.0,
+        berm_width=5.0,
+        target_elevation=120.0, # Will try to generate at 105, 115
+        design_direction="Upward",
+        variable_params=var_params
+    )
+
+    # UP is at 100.
+    # Bench 1: Toe 100, Crest 110. Mid 105.
+    # 105 is not in 0-50. Should fail.
+
+    benches, diag = generate_pit_benches(points, params)
+
+    # Should stop and report error
+    assert "error" in diag
+    assert "No design parameters defined for elevation 105.0" in diag["error"]
+
+    # Should not have produced benches beyond failure?
+    # Actually loop breaks immediately on first bench.
+    assert len(benches) == 0
+
+def test_generate_pit_variable_params_success():
+    # Test successful variable params
+    points = [(0,0,100), (100,0,100), (100,100,100), (0,100,100)]
+
+    # Define range 100-120
+    var_params = [DesignBlock(100, 120, 10.0, 5.0)]
+
+    params = PitDesignParams(
+        bench_height=10.0,
+        batter_angle_deg=75.0,
+        berm_width=5.0,
+        target_elevation=110.0,
+        design_direction="Upward",
+        variable_params=var_params
+    )
+
+    # UP is at 100.
+    # Bench 1: Toe 100, Crest 110. Mid 105. Matches.
+
+    benches, diag = generate_pit_benches(points, params)
+
+    assert "error" not in diag
+    assert len(benches) == 1

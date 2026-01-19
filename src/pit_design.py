@@ -9,10 +9,17 @@ def get_design_params_at_elevation(z: float, params: PitDesignParams) -> Tuple[f
     Returns (batter_angle_deg, berm_width) for a given elevation z.
     Checks variable_params first. If z is within a block, returns that block's params.
     Otherwise returns default params.
+
+    If variable_params are provided, STRICTLY enforces that z must be within a block.
     """
-    for block in params.variable_params:
-        if block.z_start <= z <= block.z_end:
-            return block.batter_angle_deg, block.berm_width
+    if params.variable_params:
+        for block in params.variable_params:
+            if block.z_start <= z <= block.z_end:
+                return block.batter_angle_deg, block.berm_width
+
+        # If we have variable params but no match, raise error (Mutual Exclusivity)
+        raise ValueError(f"No design parameters defined for elevation {z:.1f}")
+
     return params.batter_angle_deg, params.berm_width
 
 def clean_polygons(polys: List[sg.Polygon]) -> List[sg.Polygon]:
@@ -204,7 +211,12 @@ def generate_pit_benches(
         while current_toe_z < params.target_elevation:
             current_crest_z = current_toe_z + params.bench_height
             z_mid = (current_toe_z + current_crest_z) / 2.0
-            angle_deg, bw = get_design_params_at_elevation(z_mid, params)
+            try:
+                angle_deg, bw = get_design_params_at_elevation(z_mid, params)
+            except ValueError as e:
+                diagnostics["error"] = str(e)
+                diagnostics["bench_log"].append(f"Error: {str(e)}")
+                break
 
             theta_rad = math.radians(angle_deg)
             if theta_rad <= 0 or theta_rad >= math.pi/2:
@@ -325,7 +337,12 @@ def generate_pit_benches(
 
             current_toe_z = current_crest_z - params.bench_height
             z_mid = (current_crest_z + current_toe_z) / 2.0
-            angle_deg, bw = get_design_params_at_elevation(z_mid, params)
+            try:
+                angle_deg, bw = get_design_params_at_elevation(z_mid, params)
+            except ValueError as e:
+                diagnostics["error"] = str(e)
+                diagnostics["bench_log"].append(f"Error: {str(e)}")
+                break
 
             theta_rad = math.radians(angle_deg)
             if theta_rad <= 0 or theta_rad >= math.pi/2:
