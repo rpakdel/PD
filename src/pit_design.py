@@ -10,6 +10,7 @@ class PitDesignParams:
     batter_angle_deg: float
     berm_width: float
     target_elevation: float
+    design_direction: str = "Downward"  # "Downward" or "Upward"
 
 @dataclass
 class Mesh3D:
@@ -33,16 +34,16 @@ class BenchGeometry:
     berm_mesh: Mesh3D = field(default_factory=Mesh3D)
     diagnostics: List[str] = field(default_factory=list)
 
-def inset_polygon(poly: sg.Polygon, distance: float) -> List[sg.Polygon]:
+def offset_polygon(poly: sg.Polygon, distance: float) -> List[sg.Polygon]:
     """
-    Insets a polygon by a given distance.
-    Returns a list of Polygons (handles splits).
+    Offsets a polygon by a given distance.
+    Positive distance expands, negative distance shrinks (insets).
+    Returns a list of Polygons (handles splits/merges).
     """
     if not poly.is_valid:
         poly = poly.buffer(0)
 
-    # Shapely buffer: positive expands, negative shrinks (insets)
-    res = poly.buffer(-distance, join_style='mitre')
+    res = poly.buffer(distance, join_style='mitre')
 
     if res.is_empty:
         return []
@@ -52,8 +53,14 @@ def inset_polygon(poly: sg.Polygon, distance: float) -> List[sg.Polygon]:
     elif isinstance(res, sg.Polygon):
         return [res]
     else:
-        # GeometryCollection or other?
         return []
+
+def inset_polygon(poly: sg.Polygon, distance: float) -> List[sg.Polygon]:
+    """
+    Insets a polygon by a given distance (shrinks).
+    Returns a list of Polygons (handles splits).
+    """
+    return offset_polygon(poly, -distance)
 
 def mesh_from_polygon_difference(
     outer_poly: sg.Polygon,
@@ -176,18 +183,6 @@ def generate_pit_benches(
     if not up_poly.is_valid:
         up_poly = up_poly.buffer(0)
 
-    # Active polygons for current crest level
-    current_crest_polys = [up_poly]
-    current_crest_z = avg_z
-
-    benches = []
-    bench_id = 1
-
-    diagnostics = {
-        "start_z": current_crest_z,
-        "bench_log": []
-    }
-
     # Precompute offsets
     theta_rad = math.radians(params.batter_angle_deg)
     if theta_rad <= 0 or theta_rad >= math.pi/2:
@@ -197,70 +192,175 @@ def generate_pit_benches(
 
     bw = params.berm_width
 
-    while current_crest_z > params.target_elevation:
-        if not current_crest_polys:
-            diagnostics["bench_log"].append("Pit bottomed out (no polygons left).")
-            break
+    benches = []
+    bench_id = 1
 
-        current_toe_z = current_crest_z - params.bench_height
+    if params.design_direction == "Upward":
+        # Upward generation: UP string is Toe of bottom bench
+        current_toe_polys = [up_poly]
+        current_toe_z = avg_z
 
-        bench_geom = BenchGeometry(
-            bench_id=bench_id,
-            z_crest=current_crest_z,
-            z_toe=current_toe_z
-        )
+        diagnostics = {
+            "start_z": current_toe_z,
+            "direction": "Upward",
+            "bench_log": []
+        }
 
-        # We need to collect next level crests
-        next_level_crest_polys = []
+        # We loop while we are below the target elevation (assuming target is Top)
+        while current_toe_z < params.target_elevation:
+            current_crest_z = current_toe_z + params.bench_height
 
-        # 1. Process Faces (Crest -> Toe)
-        for poly in current_crest_polys:
-            bench_geom.crest_polys.append(poly)
-
-            # Generate Toes
-            toe_polys_list = inset_polygon(poly, h_face)
-
-            if not toe_polys_list:
-                # Pit pinched out at this face
-                # Maybe mesh a cone to the center?
-                # For now, just skip meshing face if toe is empty (vertical cliff to nothing?)
-                # Actually if toe is empty, it means the face intersection eliminated the polygon.
-                # Effectively it's a "conical pit bottom" somewhere between crest and toe Z.
-                # We could try to estimate depth, but for now we leave it open or mesh "cap".
-                continue
-
-            bench_geom.toe_polys.extend(toe_polys_list)
-
-            # Mesh Face
-            face_mesh = mesh_from_polygon_difference(
-                poly, toe_polys_list, current_crest_z, current_toe_z
+            bench_geom = BenchGeometry(
+                bench_id=bench_id,
+                z_crest=current_crest_z,
+                z_toe=current_toe_z
             )
-            bench_geom.face_mesh.extend(face_mesh)
 
-            # 2. Process Berms (Toe -> Next Crest)
-            for toe_poly in toe_polys_list:
-                next_crests = inset_polygon(toe_poly, bw)
+            # We need to collect next level toes (for next iteration)
+            next_level_toe_polys = []
 
-                # Mesh Berm (flat)
-                # Note: if next_crests is empty, the pit bottom is this toe polygon.
-                # We can mesh the berm as "Toe - Empty" = whole Toe polygon (flat floor).
+            # 1. Process Faces (Toe -> Crest) - Expansion
+            for poly in current_toe_polys:
+                bench_geom.toe_polys.append(poly)
 
-                berm_mesh = mesh_from_polygon_difference(
-                    toe_poly, next_crests, current_toe_z, current_toe_z
+                # Expand Toe to Crest
+                # Use offset_polygon with positive distance
+                crest_polys_list = offset_polygon(poly, h_face)
+
+                if not crest_polys_list:
+                    # Should not happen with positive buffer unless geometry invalid
+                    continue
+
+                bench_geom.crest_polys.extend(crest_polys_list)
+
+                # Mesh Face (Crest - Toe)
+                # Outer = Crest (High Z), Inner = Toe (Low Z)
+                # Note: mesh_from_polygon_difference(outer, inner, z_outer, z_inner)
+                # For each crest polygon resulting from this toe, we mesh the difference.
+                # However, offset_polygon might merge or split.
+                # Ideally we mesh the area between 'poly' (Toe) and 'crest_polys_list'.
+                # But 'crest_polys_list' is the outer boundary.
+                # We need to map which crest corresponds to which toe?
+                # Actually, simpliest is: Mesh (Union(Crests) - Toe).
+                # But we handle one 'poly' (Toe) at a time.
+                # The 'crest_polys_list' is the expansion of *this* toe poly.
+                # So the difference between Union(crest_polys_list) and poly is the face.
+
+                # Union of crests for this toe (usually just one, but buffer handles topology)
+                crest_union = sg.MultiPolygon(crest_polys_list).buffer(0)
+                if isinstance(crest_union, sg.Polygon):
+                    crests_for_mesh = [crest_union]
+                else:
+                    crests_for_mesh = list(crest_union.geoms)
+
+                # We want to mesh the area: Crests - Toe
+                # So outer = Crests, inner = Toe.
+                # Since mesh_from_polygon_difference takes one outer and list of inners,
+                # we iterate over crests.
+
+                for crest_poly in crests_for_mesh:
+                    face_mesh = mesh_from_polygon_difference(
+                        crest_poly, [poly], current_crest_z, current_toe_z
+                    )
+                    bench_geom.face_mesh.extend(face_mesh)
+
+                # 2. Process Berms (Crest -> Next Toe)
+                for crest_poly in crest_polys_list:
+                    next_toes = offset_polygon(crest_poly, bw)
+
+                    # Mesh Berm (Next Toe - Crest)
+                    # Berm is flat at current_crest_z?
+                    # Wait, in downward: Berm is between Toe and Next Crest at z_toe.
+                    # In Upward: Berm is between Crest and Next Toe at z_crest.
+
+                    # Next Toes (Outer) - Crest (Inner)
+                    for next_toe in next_toes:
+                        berm_mesh = mesh_from_polygon_difference(
+                            next_toe, [crest_poly], current_crest_z, current_crest_z
+                        )
+                        bench_geom.berm_mesh.extend(berm_mesh)
+
+                    next_level_toe_polys.extend(next_toes)
+
+            benches.append(bench_geom)
+            diagnostics["bench_log"].append(f"Bench {bench_id}: {len(bench_geom.crest_polys)} crests, {len(bench_geom.toe_polys)} toes.")
+
+            current_toe_polys = next_level_toe_polys
+            current_toe_z = current_crest_z
+            bench_id += 1
+
+            if bench_id > 1000:
+                diagnostics["bench_log"].append("Max benches limit reached.")
+                break
+
+    else:
+        # Downward generation (Default)
+        # Active polygons for current crest level
+        current_crest_polys = [up_poly]
+        current_crest_z = avg_z
+
+        diagnostics = {
+            "start_z": current_crest_z,
+            "direction": "Downward",
+            "bench_log": []
+        }
+
+        while current_crest_z > params.target_elevation:
+            if not current_crest_polys:
+                diagnostics["bench_log"].append("Pit bottomed out (no polygons left).")
+                break
+
+            current_toe_z = current_crest_z - params.bench_height
+
+            bench_geom = BenchGeometry(
+                bench_id=bench_id,
+                z_crest=current_crest_z,
+                z_toe=current_toe_z
+            )
+
+            # We need to collect next level crests
+            next_level_crest_polys = []
+
+            # 1. Process Faces (Crest -> Toe)
+            for poly in current_crest_polys:
+                bench_geom.crest_polys.append(poly)
+
+                # Generate Toes
+                toe_polys_list = inset_polygon(poly, h_face)
+
+                if not toe_polys_list:
+                    # Pit pinched out at this face
+                    continue
+
+                bench_geom.toe_polys.extend(toe_polys_list)
+
+                # Mesh Face
+                face_mesh = mesh_from_polygon_difference(
+                    poly, toe_polys_list, current_crest_z, current_toe_z
                 )
-                bench_geom.berm_mesh.extend(berm_mesh)
+                bench_geom.face_mesh.extend(face_mesh)
 
-                next_level_crest_polys.extend(next_crests)
+                # 2. Process Berms (Toe -> Next Crest)
+                for toe_poly in toe_polys_list:
+                    next_crests = inset_polygon(toe_poly, bw)
 
-        benches.append(bench_geom)
-        diagnostics["bench_log"].append(f"Bench {bench_id}: {len(bench_geom.crest_polys)} crests, {len(bench_geom.toe_polys)} toes.")
+                    # Mesh Berm (flat)
+                    berm_mesh = mesh_from_polygon_difference(
+                        toe_poly, next_crests, current_toe_z, current_toe_z
+                    )
+                    bench_geom.berm_mesh.extend(berm_mesh)
 
-        current_crest_polys = next_level_crest_polys
-        current_crest_z = current_toe_z
-        bench_id += 1
+                    next_level_crest_polys.extend(next_crests)
 
-        if bench_id > 1000:
-            diagnostics["bench_log"].append("Max benches limit reached.")
-            break
+            benches.append(bench_geom)
+            diagnostics["bench_log"].append(f"Bench {bench_id}: {len(bench_geom.crest_polys)} crests, {len(bench_geom.toe_polys)} toes.")
+
+            current_crest_polys = next_level_crest_polys
+            current_crest_z = current_toe_z
+            bench_id += 1
+
+            if bench_id > 1000:
+                diagnostics["bench_log"].append("Max benches limit reached.")
+                break
 
     return benches, diagnostics

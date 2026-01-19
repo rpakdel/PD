@@ -74,3 +74,56 @@ def test_split_pit():
 
     # Just ensure it doesn't crash
     assert benches
+
+def test_generate_pit_benches_upward():
+    # 10x10 square at z=0
+    # Generate upward to z=20 (2 benches)
+    # Start: Toe at 0.
+    # Bench 1: Toe=0, Crest=10. Crest should be larger than Toe.
+    # Face slope 45 deg -> dx = 10 (h=10).
+    # So Crest should be 10+10+10 = 30 wide (inset -10).
+
+    points = [(0,0,0), (10,0,0), (10,10,0), (0,10,0)]
+    params = PitDesignParams(
+        bench_height=10.0,
+        batter_angle_deg=45.0, # h=10 -> dx=10
+        berm_width=5.0,
+        target_elevation=20.0, # Should fit 2 benches (0->10, 10->20)
+        design_direction="Upward"
+    )
+
+    benches, diag = generate_pit_benches(points, params)
+
+    assert len(benches) > 0
+    # Should produce at least 1 bench, maybe 2.
+    # Bench 1: Toe Z=0, Crest Z=10.
+    # Bench 2: Toe Z=10, Crest Z=20.
+    # Loop continues while toe < target (10 < 20).
+
+    assert len(benches) == 2
+
+    b1 = benches[0]
+    assert b1.z_toe == 0.0
+    assert b1.z_crest == 10.0
+
+    # Check area expansion
+    # Start area 100.
+    # Bench 1 Crest: Buffer +10.
+    # Square 10x10 buffered by 10 becomes much larger.
+    # Roughly (10+20)x(10+20) = 30x30 = 900 (plus rounded corners).
+
+    toe_area = b1.toe_polys[0].area
+    crest_area = b1.crest_polys[0].area
+
+    assert crest_area > toe_area
+    assert math.isclose(toe_area, 100.0)
+
+    # Bench 2
+    b2 = benches[1]
+    assert b2.z_toe == 10.0
+    assert b2.z_crest == 20.0
+
+    # Bench 2 Toe should be Bench 1 Crest expanded by Berm (5.0).
+    # So b2.toe > b1.crest
+    b2_toe_area = b2.toe_polys[0].area
+    assert b2_toe_area > crest_area
