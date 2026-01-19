@@ -74,12 +74,13 @@ target_elev = st.sidebar.number_input(
 
 # Generate Design Button
 if st.sidebar.button("Generate Pit Design"):
+    # Explicitly cast arguments to ensure types are correct, avoiding potential TypeError
     params = pit_design.PitDesignParams(
-        bench_height=bench_height,
-        batter_angle_deg=batter_angle,
-        berm_width=berm_width,
-        target_elevation=target_elev,
-        design_direction=design_direction
+        bench_height=float(bench_height),
+        batter_angle_deg=float(batter_angle),
+        berm_width=float(berm_width),
+        target_elevation=float(target_elev),
+        design_direction=str(design_direction)
     )
 
     benches, diagnostics = pit_design.generate_pit_benches(up_string, params)
@@ -137,10 +138,10 @@ with st.expander("Diagnostics & Data"):
     st.write(f"Target Elevation: {target_elev} m")
     st.write(f"UP String Points: {len(up_string)}")
 
-    if st.session_state['diagnostics']:
+    if st.session_state.get('diagnostics'):
         st.write("---")
         st.write("Generation Diagnostics:")
         st.json(st.session_state['diagnostics'])
 
-    if st.session_state['benches']:
+    if st.session_state.get('benches'):
         st.write(f"Generated {len(st.session_state['benches'])} benches")
