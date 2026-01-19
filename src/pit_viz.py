@@ -1,6 +1,7 @@
 import plotly.graph_objects as go
 from typing import List, Tuple, Any
 import shapely.geometry as sg
+from pit_design import Mesh3D
 
 def create_empty_3d_figure():
     """
