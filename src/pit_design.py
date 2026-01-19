@@ -207,6 +207,12 @@ def generate_pit_benches(
             "bench_log": []
         }
 
+        if current_toe_z >= params.target_elevation:
+            msg = f"Start elevation ({current_toe_z:.1f}) is already >= Target elevation ({params.target_elevation:.1f}). No benches generated."
+            diagnostics["error"] = msg
+            diagnostics["bench_log"].append(msg)
+            return [], diagnostics
+
         # We loop while we are below the target elevation (assuming target is Top)
         while current_toe_z < params.target_elevation:
             current_crest_z = current_toe_z + params.bench_height
@@ -329,6 +335,12 @@ def generate_pit_benches(
             "direction": "Downward",
             "bench_log": []
         }
+
+        if current_crest_z <= params.target_elevation:
+            msg = f"Start elevation ({current_crest_z:.1f}) is already <= Target elevation ({params.target_elevation:.1f}). No benches generated."
+            diagnostics["error"] = msg
+            diagnostics["bench_log"].append(msg)
+            return [], diagnostics
 
         while current_crest_z > params.target_elevation:
             if not current_crest_polys:
