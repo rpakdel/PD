@@ -3,6 +3,7 @@ import pandas as pd
 import pit_viz as viz
 import data_loader
 import pit_design
+import design_params
 
 st.set_page_config(
     page_title="Open Pit Design PoC",
@@ -98,7 +99,7 @@ if use_variable_params:
     if not edited_df.empty:
         for _, row in edited_df.iterrows():
             try:
-                block = pit_design.DesignBlock(
+                block = design_params.DesignBlock(
                     z_start=float(row["Min Elev"]),
                     z_end=float(row["Max Elev"]),
                     batter_angle_deg=float(row["Angle (deg)"]),
@@ -111,7 +112,7 @@ if use_variable_params:
 # Generate Design Button
 if st.sidebar.button("Generate Pit Design"):
     # Explicitly cast arguments to ensure types are correct, avoiding potential TypeError
-    params = pit_design.PitDesignParams(
+    params = design_params.PitDesignParams(
         bench_height=float(bench_height),
         batter_angle_deg=float(batter_angle),
         berm_width=float(berm_width),

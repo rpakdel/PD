@@ -1,7 +1,8 @@
 import pytest
 import math
 import shapely.geometry as sg
-from pit_design import inset_polygon, generate_pit_benches, PitDesignParams, Mesh3D
+from pit_design import inset_polygon, generate_pit_benches
+from design_params import PitDesignParams, Mesh3D
 
 def test_inset_polygon():
     # Simple square 10x10
