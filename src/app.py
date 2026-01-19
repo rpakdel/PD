@@ -47,11 +47,29 @@ berm_width = st.sidebar.number_input(
     help="Width of the catch berm"
 )
 
+design_direction = st.sidebar.radio(
+    "Generation Direction",
+    options=["Downward", "Upward"],
+    index=0,
+    help="Direction to generate the pit. 'Downward' projects the string down. 'Upward' projects the string up."
+)
+
+target_elev_label = "Target Elevation (m)"
+target_elev_help = "Target elevation to reach"
+default_target = 0.0
+
+if design_direction == "Downward":
+    target_elev_help = "Bottom elevation to reach (e.g. 0 or -100)"
+    default_target = 0.0
+else:
+    target_elev_help = "Top elevation to reach (e.g. 200)"
+    default_target = 200.0
+
 target_elev = st.sidebar.number_input(
-    "Target Elevation (m)",
-    value=0.0,
+    target_elev_label,
+    value=default_target,
     step=10.0,
-    help="Bottom elevation to reach"
+    help=target_elev_help
 )
 
 # Generate Design Button
@@ -60,7 +78,8 @@ if st.sidebar.button("Generate Pit Design"):
         bench_height=bench_height,
         batter_angle_deg=batter_angle,
         berm_width=berm_width,
-        target_elevation=target_elev
+        target_elevation=target_elev,
+        design_direction=design_direction
     )
 
     benches, diagnostics = pit_design.generate_pit_benches(up_string, params)
