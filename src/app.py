@@ -172,6 +172,10 @@ st.sidebar.info("DXF Topography and UP String import will be implemented in futu
 # Main area visualization
 st.subheader("3D Visualization")
 
+# Check for errors in diagnostics and show them prominently
+if st.session_state.get('diagnostics') and "error" in st.session_state['diagnostics']:
+    st.error(f"Generation Error: {st.session_state['diagnostics']['error']}")
+
 # Create and display the plot
 fig = viz.plot_pit_data(
     up_string,
