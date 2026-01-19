@@ -1,8 +1,15 @@
 import math
 from dataclasses import dataclass, field
-from typing import List, Tuple, Dict, Any, Union
+from typing import List, Tuple, Dict, Any, Union, Optional
 import shapely.geometry as sg
 import shapely.ops as so
+
+@dataclass
+class DesignBlock:
+    z_start: float
+    z_end: float
+    batter_angle_deg: float
+    berm_width: float
 
 @dataclass
 class PitDesignParams:
@@ -11,6 +18,7 @@ class PitDesignParams:
     berm_width: float
     target_elevation: float
     design_direction: str = "Downward"  # "Downward" or "Upward"
+    variable_params: List[DesignBlock] = field(default_factory=list)
 
 @dataclass
 class Mesh3D:
@@ -33,6 +41,17 @@ class BenchGeometry:
     face_mesh: Mesh3D = field(default_factory=Mesh3D)
     berm_mesh: Mesh3D = field(default_factory=Mesh3D)
     diagnostics: List[str] = field(default_factory=list)
+
+def get_design_params_at_elevation(z: float, params: PitDesignParams) -> Tuple[float, float]:
+    """
+    Returns (batter_angle_deg, berm_width) for a given elevation z.
+    Checks variable_params first. If z is within a block, returns that block's params.
+    Otherwise returns default params.
+    """
+    for block in params.variable_params:
+        if block.z_start <= z <= block.z_end:
+            return block.batter_angle_deg, block.berm_width
+    return params.batter_angle_deg, params.berm_width
 
 def clean_polygons(polys: List[sg.Polygon]) -> List[sg.Polygon]:
     """
@@ -205,15 +224,6 @@ def generate_pit_benches(
     if not up_poly.is_valid:
         up_poly = up_poly.buffer(0)
 
-    # Precompute offsets
-    theta_rad = math.radians(params.batter_angle_deg)
-    if theta_rad <= 0 or theta_rad >= math.pi/2:
-        h_face = 0.0
-    else:
-        h_face = params.bench_height / math.tan(theta_rad)
-
-    bw = params.berm_width
-
     benches = []
     bench_id = 1
 
@@ -231,6 +241,14 @@ def generate_pit_benches(
         # We loop while we are below the target elevation (assuming target is Top)
         while current_toe_z < params.target_elevation:
             current_crest_z = current_toe_z + params.bench_height
+            z_mid = (current_toe_z + current_crest_z) / 2.0
+            angle_deg, bw = get_design_params_at_elevation(z_mid, params)
+
+            theta_rad = math.radians(angle_deg)
+            if theta_rad <= 0 or theta_rad >= math.pi/2:
+                h_face = 0.0
+            else:
+                h_face = params.bench_height / math.tan(theta_rad)
 
             bench_geom = BenchGeometry(
                 bench_id=bench_id,
@@ -344,6 +362,14 @@ def generate_pit_benches(
                 break
 
             current_toe_z = current_crest_z - params.bench_height
+            z_mid = (current_crest_z + current_toe_z) / 2.0
+            angle_deg, bw = get_design_params_at_elevation(z_mid, params)
+
+            theta_rad = math.radians(angle_deg)
+            if theta_rad <= 0 or theta_rad >= math.pi/2:
+                h_face = 0.0
+            else:
+                h_face = params.bench_height / math.tan(theta_rad)
 
             bench_geom = BenchGeometry(
                 bench_id=bench_id,

@@ -1,4 +1,5 @@
 import streamlit as st
+import pandas as pd
 import pit_viz as viz
 import data_loader
 import pit_design
@@ -72,6 +73,41 @@ target_elev = st.sidebar.number_input(
     help=target_elev_help
 )
 
+st.sidebar.markdown("---")
+use_variable_params = st.sidebar.checkbox("Use Elevation-based Parameters", value=False)
+variable_params_list = []
+
+if use_variable_params:
+    st.sidebar.markdown("Define parameters for specific elevation ranges. Ranges are inclusive.")
+
+    # Default data for the editor
+    default_data = {
+        "Min Elev": [0.0, 50.0],
+        "Max Elev": [50.0, 100.0],
+        "Angle (deg)": [10.0, 12.0],
+        "Width (m)": [5.0, 7.0]
+    }
+
+    edited_df = st.sidebar.data_editor(
+        pd.DataFrame(default_data),
+        num_rows="dynamic",
+        use_container_width=True
+    )
+
+    # Parse DataFrame to List[DesignBlock]
+    if not edited_df.empty:
+        for _, row in edited_df.iterrows():
+            try:
+                block = pit_design.DesignBlock(
+                    z_start=float(row["Min Elev"]),
+                    z_end=float(row["Max Elev"]),
+                    batter_angle_deg=float(row["Angle (deg)"]),
+                    berm_width=float(row["Width (m)"])
+                )
+                variable_params_list.append(block)
+            except (ValueError, KeyError):
+                st.sidebar.error("Invalid data in parameter table.")
+
 # Generate Design Button
 if st.sidebar.button("Generate Pit Design"):
     # Explicitly cast arguments to ensure types are correct, avoiding potential TypeError
@@ -80,7 +116,8 @@ if st.sidebar.button("Generate Pit Design"):
         batter_angle_deg=float(batter_angle),
         berm_width=float(berm_width),
         target_elevation=float(target_elev),
-        design_direction=str(design_direction)
+        design_direction=str(design_direction),
+        variable_params=variable_params_list
     )
 
     benches, diagnostics = pit_design.generate_pit_benches(up_string, params)
