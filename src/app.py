@@ -82,6 +82,7 @@ target_elev = st.sidebar.number_input(
 
 st.sidebar.markdown("---")
 variable_params_list = []
+parsing_error = False
 
 if use_variable_params:
     st.sidebar.markdown("Define parameters for specific elevation ranges. Ranges are inclusive.")
@@ -113,22 +114,28 @@ if use_variable_params:
                 variable_params_list.append(block)
             except (ValueError, KeyError):
                 st.sidebar.error("Invalid data in parameter table.")
+                parsing_error = True
 
 # Generate Design Button
 if st.sidebar.button("Generate Pit Design"):
-    # Explicitly cast arguments to ensure types are correct, avoiding potential TypeError
-    params = design_params.PitDesignParams(
-        bench_height=float(bench_height),
-        batter_angle_deg=float(batter_angle),
-        berm_width=float(berm_width),
-        target_elevation=float(target_elev),
-        design_direction=str(design_direction),
-        variable_params=variable_params_list
-    )
+    if parsing_error:
+        st.error("Please fix errors in the parameter table before generating.")
+    elif use_variable_params and not variable_params_list:
+        st.error("Use Elevation-based Parameters is checked, but no valid ranges are defined.")
+    else:
+        # Explicitly cast arguments to ensure types are correct, avoiding potential TypeError
+        params = design_params.PitDesignParams(
+            bench_height=float(bench_height),
+            batter_angle_deg=float(batter_angle),
+            berm_width=float(berm_width),
+            target_elevation=float(target_elev),
+            design_direction=str(design_direction),
+            variable_params=variable_params_list
+        )
 
-    benches, diagnostics = pit_design.generate_pit_benches(up_string, params)
-    st.session_state['benches'] = benches
-    st.session_state['diagnostics'] = diagnostics
+        benches, diagnostics = pit_design.generate_pit_benches(up_string, params)
+        st.session_state['benches'] = benches
+        st.session_state['diagnostics'] = diagnostics
 else:
     if 'benches' not in st.session_state:
         st.session_state['benches'] = []
