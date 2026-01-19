@@ -34,6 +34,33 @@ class BenchGeometry:
     berm_mesh: Mesh3D = field(default_factory=Mesh3D)
     diagnostics: List[str] = field(default_factory=list)
 
+def clean_polygons(polys: List[sg.Polygon]) -> List[sg.Polygon]:
+    """
+    Cleans a list of polygons by performing a unary_union.
+    This handles merging overlapping polygons and simplifying topology.
+    Returns a list of disjoint Polygons.
+    """
+    if not polys:
+        return []
+
+    # Filter out invalid or empty
+    valid_polys = [p for p in polys if not p.is_empty and p.is_valid]
+    if not valid_polys:
+        return []
+
+    merged = so.unary_union(valid_polys)
+
+    if merged.is_empty:
+        return []
+
+    if isinstance(merged, sg.MultiPolygon):
+        return list(merged.geoms)
+    elif isinstance(merged, sg.Polygon):
+        return [merged]
+    else:
+        # GeometryCollection or other (shouldn't happen with polygons input)
+        return []
+
 def offset_polygon(poly: sg.Polygon, distance: float) -> List[sg.Polygon]:
     """
     Offsets a polygon by a given distance.
@@ -127,11 +154,6 @@ def mesh_from_polygon_difference(
                  # If this is "Face" and inner collapsed, it's a pinch out.
                  # Usually we pinch out to z_toe.
                  # Let's assume cap at z_outer?
-                 # No, if it's Face (Crest->Toe) and Toe is empty, it's a cone ending at a point?
-                 # But inset_polygon returned empty, so we don't have a point.
-                 # Actually if inner is empty, diff_poly is outer.
-                 # If this is "Face", we probably shouldn't be here if offset failed?
-                 # But let's assume flat for robustness if unsure.
                  z = z_outer
             else:
                 # Interpolate Z
@@ -247,11 +269,13 @@ def generate_pit_benches(
                 # So the difference between Union(crest_polys_list) and poly is the face.
 
                 # Union of crests for this toe (usually just one, but buffer handles topology)
-                crest_union = sg.MultiPolygon(crest_polys_list).buffer(0)
+                crest_union = so.unary_union(crest_polys_list)
                 if isinstance(crest_union, sg.Polygon):
                     crests_for_mesh = [crest_union]
-                else:
+                elif isinstance(crest_union, sg.MultiPolygon):
                     crests_for_mesh = list(crest_union.geoms)
+                else:
+                    crests_for_mesh = [] # Empty?
 
                 # We want to mesh the area: Crests - Toe
                 # So outer = Crests, inner = Toe.
@@ -283,9 +307,18 @@ def generate_pit_benches(
                     next_level_toe_polys.extend(next_toes)
 
             benches.append(bench_geom)
-            diagnostics["bench_log"].append(f"Bench {bench_id}: {len(bench_geom.crest_polys)} crests, {len(bench_geom.toe_polys)} toes.")
 
-            current_toe_polys = next_level_toe_polys
+            # Diagnostic stats
+            total_crest_area = sum(p.area for p in bench_geom.crest_polys)
+            total_toe_area = sum(p.area for p in bench_geom.toe_polys)
+            diagnostics["bench_log"].append(
+                f"Bench {bench_id}: {len(bench_geom.crest_polys)} crests ({total_crest_area:.0f} m2), "
+                f"{len(bench_geom.toe_polys)} toes ({total_toe_area:.0f} m2)."
+            )
+
+            # CLEAN UP and MERGE for next iteration
+            # This is crucial for Upward to merge expanding bubbles
+            current_toe_polys = clean_polygons(next_level_toe_polys)
             current_toe_z = current_crest_z
             bench_id += 1
 
@@ -353,9 +386,19 @@ def generate_pit_benches(
                     next_level_crest_polys.extend(next_crests)
 
             benches.append(bench_geom)
-            diagnostics["bench_log"].append(f"Bench {bench_id}: {len(bench_geom.crest_polys)} crests, {len(bench_geom.toe_polys)} toes.")
 
-            current_crest_polys = next_level_crest_polys
+            # Diagnostic stats
+            total_crest_area = sum(p.area for p in bench_geom.crest_polys)
+            total_toe_area = sum(p.area for p in bench_geom.toe_polys)
+            diagnostics["bench_log"].append(
+                f"Bench {bench_id}: {len(bench_geom.crest_polys)} crests ({total_crest_area:.0f} m2), "
+                f"{len(bench_geom.toe_polys)} toes ({total_toe_area:.0f} m2)."
+            )
+
+            # CLEAN UP and MERGE/SPLIT cleanly for next iteration
+            # Even for downward, this simplifies topology (e.g. if islands merge - though unlikely in shrinkage)
+            # But it ensures valid geometry.
+            current_crest_polys = clean_polygons(next_level_crest_polys)
             current_crest_z = current_toe_z
             bench_id += 1
 
