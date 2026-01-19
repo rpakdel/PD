@@ -72,32 +72,84 @@ def plot_pit_data(
     # Plot Benches
     if benches:
         for bench in benches:
-            # Plot Crest
-            # Convert shapely polygon to lists
-            if bench.crest_poly and not bench.crest_poly.is_empty:
-                c_x, c_y = bench.crest_poly.exterior.xy
-                c_z = [bench.z_crest] * len(c_x)
+            # 1. Plot Mesh Faces (Walls)
+            if bench.face_mesh and bench.face_mesh.vertices:
+                v = bench.face_mesh.vertices
+                f = bench.face_mesh.faces
 
-                fig.add_trace(go.Scatter3d(
-                    x=list(c_x), y=list(c_y), z=c_z,
-                    mode='lines',
-                    line=dict(color='green', width=3),
-                    name=f'Bench {bench.bench_id} Crest',
-                    showlegend=False
+                x_v = [p[0] for p in v]
+                y_v = [p[1] for p in v]
+                z_v = [p[2] for p in v]
+
+                i_f = [t[0] for t in f]
+                j_f = [t[1] for t in f]
+                k_f = [t[2] for t in f]
+
+                fig.add_trace(go.Mesh3d(
+                    x=x_v, y=y_v, z=z_v,
+                    i=i_f, j=j_f, k=k_f,
+                    color='gray',
+                    opacity=0.8,
+                    name=f'Bench {bench.bench_id} Face',
+                    showlegend=True,
+                    hoverinfo='skip',
+                    flatshading=True,
+                    lighting=dict(ambient=0.5, diffuse=0.5)
                 ))
 
-            # Plot Toe
-            if bench.toe_poly and not bench.toe_poly.is_empty:
-                t_x, t_y = bench.toe_poly.exterior.xy
-                t_z = [bench.z_toe] * len(t_x)
+            # 2. Plot Mesh Berms (Floors)
+            if bench.berm_mesh and bench.berm_mesh.vertices:
+                v = bench.berm_mesh.vertices
+                f = bench.berm_mesh.faces
 
-                fig.add_trace(go.Scatter3d(
-                    x=list(t_x), y=list(t_y), z=t_z,
-                    mode='lines',
-                    line=dict(color='orange', width=3),
-                    name=f'Bench {bench.bench_id} Toe',
-                    showlegend=False
+                x_v = [p[0] for p in v]
+                y_v = [p[1] for p in v]
+                z_v = [p[2] for p in v]
+
+                i_f = [t[0] for t in f]
+                j_f = [t[1] for t in f]
+                k_f = [t[2] for t in f]
+
+                fig.add_trace(go.Mesh3d(
+                    x=x_v, y=y_v, z=z_v,
+                    i=i_f, j=j_f, k=k_f,
+                    color='lightgray',
+                    opacity=0.6,
+                    name=f'Bench {bench.bench_id} Berm',
+                    showlegend=True,
+                    hoverinfo='skip',
+                    flatshading=True
                 ))
+
+            # 3. Plot Crest Lines (Wireframe)
+            if bench.crest_polys:
+                for poly in bench.crest_polys:
+                    if not poly.is_empty:
+                        c_x, c_y = poly.exterior.xy
+                        c_z = [bench.z_crest] * len(c_x)
+
+                        fig.add_trace(go.Scatter3d(
+                            x=list(c_x), y=list(c_y), z=c_z,
+                            mode='lines',
+                            line=dict(color='green', width=3),
+                            name=f'Bench {bench.bench_id} Crest',
+                            showlegend=False
+                        ))
+
+            # 4. Plot Toe Lines (Wireframe)
+            if bench.toe_polys:
+                for poly in bench.toe_polys:
+                    if not poly.is_empty:
+                        t_x, t_y = poly.exterior.xy
+                        t_z = [bench.z_toe] * len(t_x)
+
+                        fig.add_trace(go.Scatter3d(
+                            x=list(t_x), y=list(t_y), z=t_z,
+                            mode='lines',
+                            line=dict(color='orange', width=3),
+                            name=f'Bench {bench.bench_id} Toe',
+                            showlegend=False
+                        ))
 
     fig.update_layout(
         title="Open Pit Design 3D Viewer",

@@ -10,32 +10,29 @@
 - [x] Plot UP polyline in 3D.
 - [x] Add index selector + highlight.
 
-## Phase 2: Generate pit benches from UP (core)
+## Phase 2: Pit Design Engine & Surface Generation (Core Priority)
 - [x] Create `src/pit_design.py` as the central engine.
 - [x] Implement `inset_polygon` function using Shapely/PyClipper.
-- [x] Implement bench generation logic:
-    - [x] Calculate horizontal offsets based on bench height, batter angle, and berm width.
-    - [x] Loop to generate nested bench polygons until target depth/elevation.
-    - [x] Handle polygon validity and robustness (MultiPolygons).
-- [x] Integrate `pit_design` into `app.py`.
-- [x] Visualize bench outlines in `pit_viz.py`.
+- [x] Implement bench generation logic (Strings).
+- [ ] **Upgrade**: Handle MultiPolygons (split pits) properly (don't just take largest).
+- [ ] **New**: Generate Triangulated Mesh (Faces & Berms) for "complete pit" representation.
+- [ ] **New**: Verify geometry validity (normals, winding).
 
-## Phase 3: Export bench strings (core)
+## Phase 3: Visualization (Core Priority)
+- [x] Line visualization (Crest/Toe).
+- [ ] **New**: Mesh visualization in Plotly (using `go.Mesh3d`).
+
+## Phase 4: Export (Core Priority)
 - [ ] Create export function for bench strings (CSV/JSON).
+- [ ] Create export function for Pit Surface (DXF/OBJ/STL).
 - [ ] Add download buttons in Streamlit UI.
 
-## Phase 4: Import + display DXF topo TIN (important)
+## Phase 5: DXF Topo Import (Lower Priority)
 - [ ] Implement DXF import using `ezdxf` in `data_loader.py`.
 - [ ] Filter by hard-coded layer name.
 - [ ] Visualize topo mesh in `pit_viz.py`.
 
-## Phase 5: Align pit design with topo (optional but valuable)
-- [ ] Sample topo at UP vertices.
-- [ ] Add Z0 alignment option.
-
-## Phase 6: Robustness improvements (recommended)
-- [ ] Improve polygon offset robustness (handle self-intersections).
-- [ ] Add detailed diagnostics.
-
-## Phase 7: Sector-based slopes / berms (if needed)
-- [ ] Implement sector-based parameters.
+## Phase 6: Advanced/Robustness
+- [ ] Align pit design with topo (sample Z0).
+- [ ] Sector-based slopes.
+- [ ] Detailed diagnostics.
