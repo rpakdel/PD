@@ -1,7 +1,8 @@
 import plotly.graph_objects as go
-from typing import List, Tuple, Any
+from typing import List, Tuple, Any, Optional
 import shapely.geometry as sg
-from design_params import Mesh3D
+import numpy as np
+from design_params import Mesh3D, Slice
 
 def create_empty_3d_figure():
     """
@@ -35,11 +36,14 @@ def create_empty_3d_figure():
 def plot_pit_data(
     up_string: List[Tuple[float, float, float]],
     highlight_index: int = None,
-    benches: List[Any] = None
+    benches: List[Any] = None,
+    ramp_centerline: List[Tuple[float, float, float]] = None,
+    ramp_corridor: Tuple[List[Tuple[float, float, float]], List[Tuple[float, float, float]]] = None
 ):
     """
     Plots the Ultimate Pit string and optionally highlights a specific point.
     Also plots generated benches if provided.
+    Also plots ramp centerline and corridor if provided.
     """
     fig = go.Figure()
 
@@ -151,6 +155,45 @@ def plot_pit_data(
                             name=f'Bench {bench.bench_id} Toe',
                             showlegend=False
                         ))
+
+    # Plot Ramp Centerline
+    if ramp_centerline:
+        rx = [p[0] for p in ramp_centerline]
+        ry = [p[1] for p in ramp_centerline]
+        rz = [p[2] for p in ramp_centerline]
+
+        fig.add_trace(go.Scatter3d(
+            x=rx, y=ry, z=rz,
+            mode='lines',
+            line=dict(color='magenta', width=6),
+            name='Ramp Centerline'
+        ))
+
+    # Plot Ramp Corridor
+    if ramp_corridor:
+        left, right = ramp_corridor
+
+        lx = [p[0] for p in left]
+        ly = [p[1] for p in left]
+        lz = [p[2] for p in left]
+
+        rx = [p[0] for p in right]
+        ry = [p[1] for p in right]
+        rz = [p[2] for p in right]
+
+        fig.add_trace(go.Scatter3d(
+            x=lx, y=ly, z=lz,
+            mode='lines',
+            line=dict(color='yellow', width=3, dash='dash'),
+            name='Ramp Left'
+        ))
+
+        fig.add_trace(go.Scatter3d(
+            x=rx, y=ry, z=rz,
+            mode='lines',
+            line=dict(color='yellow', width=3, dash='dash'),
+            name='Ramp Right'
+        ))
 
     fig.update_layout(
         title="Open Pit Design 3D Viewer",

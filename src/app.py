@@ -20,6 +20,18 @@ This tool generates a pit design from an Ultimate Pit (UP) string.
 # Load UP string
 up_string = data_loader.get_sample_up_string()
 
+# Initialize Session State
+if 'benches' not in st.session_state:
+    st.session_state['benches'] = []
+if 'diagnostics' not in st.session_state:
+    st.session_state['diagnostics'] = {}
+if 'ramp_slices' not in st.session_state:
+    st.session_state['ramp_slices'] = []
+if 'ramp_centerline' not in st.session_state:
+    st.session_state['ramp_centerline'] = []
+if 'ramp_corridor' not in st.session_state:
+    st.session_state['ramp_corridor'] = None
+
 # Sidebar for inputs
 st.sidebar.header("Design Parameters")
 
@@ -140,12 +152,9 @@ if st.sidebar.button("Generate Pit Design"):
         st.session_state['benches'] = benches
         st.session_state['diagnostics'] = diagnostics
         st.session_state['ramp_slices'] = [] # Reset ramp slices
-else:
-    if 'benches' not in st.session_state:
-        st.session_state['benches'] = []
-        st.session_state['diagnostics'] = {}
-    if 'ramp_slices' not in st.session_state:
-        st.session_state['ramp_slices'] = []
+        st.session_state['ramp_centerline'] = []
+        st.session_state['ramp_corridor'] = None
+
 
 st.sidebar.markdown("---")
 st.sidebar.header("Ramp Design (Beta)")
@@ -154,6 +163,12 @@ st.sidebar.header("Ramp Design (Beta)")
 ramp_width = st.sidebar.number_input("Ramp Width (m)", value=20.0, step=1.0)
 ramp_grade = st.sidebar.number_input("Max Grade (%)", value=10.0, step=0.5)
 ramp_z_step = st.sidebar.number_input("Solver Z Step (m)", value=5.0, step=1.0, help="Vertical step size for ramp slices")
+ramp_mode = st.sidebar.selectbox("Ramp Mode", options=["spiral", "switchback"], index=0)
+
+# Start Point Selection
+# We default to using the 'Highlighted Point' from below as the start point x,y
+# And top Z.
+start_pt_idx = 0
 
 if st.sidebar.button("Preview Ramp Slices"):
     if not st.session_state['benches']:
@@ -164,8 +179,10 @@ if st.sidebar.button("Preview Ramp Slices"):
         ramp_params = design_params.RampParams(
             ramp_width=float(ramp_width),
             grade_max=float(ramp_grade)/100.0,
-            z_step=float(ramp_z_step)
+            z_step=float(ramp_z_step),
+            mode=ramp_mode
         )
+        st.session_state['ramp_params'] = ramp_params
 
         slices = ramp_design.create_slices(
             st.session_state['benches'],
@@ -174,6 +191,61 @@ if st.sidebar.button("Preview Ramp Slices"):
         )
         st.session_state['ramp_slices'] = slices
         st.success(f"Generated {len(slices)} slices for ramp preview.")
+
+if st.sidebar.button("Generate Ramp"):
+    if not st.session_state['ramp_slices']:
+         st.error("Please preview ramp slices first to initialize data.")
+    else:
+        # Get Start Point
+        # Use highlighted point index or defaults
+        # Assuming we want to start at the top of the pit near a specific point
+        # Let's pick the point from UP string
+
+        # We need to know which index is selected below
+        # Accessing widget state via key might be better, but we are using flow
+        # Let's rely on st.session_state variable if we key it
+        pass # We will get it from the widget below if possible, or defaulting to 0
+
+        # Actually, let's just grab the one from UP string at index 0 for now or add a selector here
+        # But we have one below.
+
+        # To make it robust:
+        # We need x,y from UP string. Z from top slice.
+
+        # Use the slider value if available? Streamlit reruns script, so 'selected_index' variable below is available?
+        # No, execution is top-down. We need to move the slider up or use session state.
+
+        # Let's just default to index 0 for now.
+        start_pt_uv = up_string[0]
+        # We can add a "Start Point Index" input here specifically for ramp
+
+        ramp_params = st.session_state.get('ramp_params')
+        if not ramp_params:
+             ramp_params = design_params.RampParams(
+                ramp_width=float(ramp_width),
+                grade_max=float(ramp_grade)/100.0,
+                z_step=float(ramp_z_step),
+                mode=ramp_mode
+            )
+
+        slices = st.session_state['ramp_slices']
+        target_z = float(target_elev) # Same as pit target
+
+        start_point_xy = (start_pt_uv[0], start_pt_uv[1])
+
+        path, diag = ramp_design.solve_ramp(slices, start_point_xy, target_z, ramp_params)
+
+        if path:
+            st.session_state['ramp_centerline'] = path
+            st.success("Ramp generated successfully!")
+
+            # Generate Corridor
+            left, right = ramp_design.generate_ramp_corridor(path, ramp_params.ramp_width)
+            st.session_state['ramp_corridor'] = (left, right)
+
+        else:
+            st.error("Ramp generation failed.")
+            st.json(diag)
 
 
 st.sidebar.markdown("---")
@@ -212,20 +284,11 @@ if st.session_state.get('diagnostics') and "error" in st.session_state['diagnost
     st.error(f"Generation Error: {st.session_state['diagnostics']['error']}")
 
 # Create and display the plot
-# Add ramp slices to the plot if they exist
-# We need to update pit_viz.plot_pit_data to handle slices or manually add them here.
-# For now, let's just pass them if we update viz, or create a new fig if we don't want to touch viz yet?
-# Better to update viz to accept optional 'slices'.
-
-# I will update viz.plot_pit_data signature in next step or use kwargs
-# For now, let's assume I will pass it.
 extra_traces = []
 if st.session_state['ramp_slices']:
     import plotly.graph_objects as go
-    import numpy as np
 
-    # Visualize Free Poly (Green) and Pit Poly (Red, dashed)
-    # We select a subset of slices to avoid clutter
+    # Visualize Free Poly (Green)
     step_vis = max(1, len(st.session_state['ramp_slices']) // 10)
 
     for i, sl in enumerate(st.session_state['ramp_slices']):
@@ -247,31 +310,16 @@ if st.session_state['ramp_slices']:
                 extra_traces.append(go.Scatter3d(
                     x=list(x), y=list(y), z=z_arr,
                     mode='lines',
-                    line=dict(color='cyan', width=4),
+                    line=dict(color='cyan', width=2),
                     name=f'Free Poly {z:.1f}'
                 ))
-
-        # Pit Poly
-        # if not sl.pit_poly.is_empty:
-        #     if sl.pit_poly.geom_type == 'Polygon':
-        #         polys = [sl.pit_poly]
-        #     else:
-        #         polys = list(sl.pit_poly.geoms)
-        #
-        #     for poly in polys:
-        #         x, y = poly.exterior.xy
-        #         z_arr = [z] * len(x)
-        #         extra_traces.append(go.Scatter3d(
-        #             x=list(x), y=list(y), z=z_arr,
-        #             mode='lines',
-        #             line=dict(color='red', width=2, dash='dash'),
-        #             name=f'Pit Poly {z:.1f}'
-        #         ))
 
 fig = viz.plot_pit_data(
     up_string,
     highlight_index=selected_index,
-    benches=st.session_state['benches']
+    benches=st.session_state['benches'],
+    ramp_centerline=st.session_state.get('ramp_centerline'),
+    ramp_corridor=st.session_state.get('ramp_corridor')
 )
 if extra_traces:
     fig.add_traces(extra_traces)
