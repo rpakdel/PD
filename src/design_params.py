@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Tuple, Dict, Any
+from typing import List, Tuple, Dict, Any, Optional
 import shapely.geometry as sg
 
 @dataclass
@@ -39,3 +39,22 @@ class BenchGeometry:
     face_mesh: Mesh3D = field(default_factory=Mesh3D)
     berm_mesh: Mesh3D = field(default_factory=Mesh3D)
     diagnostics: List[str] = field(default_factory=list)
+
+@dataclass
+class RampParams:
+    ramp_width: float
+    grade_max: float
+    safety_margin: float = 0.0
+    ditch_allowance: float = 0.0
+    min_radius: float = 20.0
+    z_step: float = 1.0
+    horizontal_tol: float = 0.15
+    segment_samples: int = 7
+    mode: str = "spiral"  # "spiral" or "switchback"
+    seed: int = 42
+
+@dataclass
+class Slice:
+    z: float
+    pit_poly: sg.Polygon  # Can be MultiPolygon
+    free_poly: sg.Polygon # Can be MultiPolygon. Region where centerline is allowed.
