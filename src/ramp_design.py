@@ -114,11 +114,12 @@ def create_slices(
         return []
 
     # Determine Z range
-    top_z = benches[0].z_crest
-    bottom_z = benches[-1].z_toe
+    # Benches might be ordered top-down or bottom-up depending on generation
+    # Robustly find max and min Z
+    top_z = max(b.z_crest for b in benches)
+    bottom_z = min(b.z_toe for b in benches)
 
     # Generate Z levels
-    # Use linspace or arange? Arange ensures step size.
     # We want to start exactly at top_z and go down.
 
     # Num steps
@@ -128,13 +129,21 @@ def create_slices(
     # We can just iterate
     z_levels = []
     curr_z = top_z
-    while curr_z >= bottom_z:
+    # We use a small epsilon for float comparison to include bottom_z if exact hit
+    while curr_z >= bottom_z - 1e-6:
         z_levels.append(curr_z)
         curr_z -= ramp_params.z_step
 
-    # Ensure we include the bottom if it's close
-    if abs(z_levels[-1] - bottom_z) > 1e-3:
-        # If we overshot significantly, maybe we don't care about going below bottom.
+    # Ensure we include the bottom if it's close or missed
+    # Check if we have any levels
+    if not z_levels:
+         # Should not happen given logic above, unless top_z < bottom_z (impossible here)
+         pass
+    elif abs(z_levels[-1] - bottom_z) > 1e-3:
+        # If we stopped above bottom_z, check if we need to add bottom_z
+        # (Usually logic above covers it, but floating point drift might stop slightly before)
+        # However, the loop continues while >= bottom_z.
+        # If we are effectively at bottom_z, we stop.
         pass
 
     slices = []
