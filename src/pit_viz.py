@@ -44,6 +44,12 @@ def plot_pit_data(
     Plots the Ultimate Pit string and optionally highlights a specific point.
     Also plots generated benches if provided.
     Also plots ramp centerline and corridor if provided.
+
+    :param up_string: List of (x, y, z) tuples for the Ultimate Pit string.
+    :param highlight_index: Index of the point to highlight.
+    :param benches: List of bench objects.
+    :param ramp_centerline: List of (x, y, z) tuples for the ramp centerline.
+    :param ramp_corridor: Tuple of (left, right) ramp edges.
     """
     fig = go.Figure()
 
