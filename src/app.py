@@ -129,6 +129,40 @@ if use_variable_params:
                 st.sidebar.error("Invalid data in parameter table.")
                 parsing_error = True
 
+st.sidebar.markdown("---")
+st.sidebar.header("Ramp Design (Beta)")
+
+# Ramp Inputs
+ramp_width = st.sidebar.number_input("Ramp Width (m)", value=20.0, step=1.0)
+ramp_grade = st.sidebar.number_input("Max Grade (%)", value=10.0, step=0.5)
+ramp_z_step = st.sidebar.number_input("Solver Z Step (m)", value=5.0, step=1.0, help="Vertical step size for ramp slices")
+ramp_mode = st.sidebar.selectbox("Ramp Mode", options=["spiral", "switchback"], index=0)
+
+# Start Point Selection (UP Inspector)
+st.sidebar.markdown("---")
+st.sidebar.header("UP String Inspector")
+
+# Index selector
+num_points = len(up_string)
+unique_point_count = num_points - 1 if num_points > 1 and up_string[0] == up_string[-1] else num_points
+
+selected_index = st.sidebar.number_input(
+    "Highlight Point Index (Ramp Start)",
+    min_value=0,
+    max_value=unique_point_count - 1 if unique_point_count > 0 else 0,
+    value=0,
+    step=1
+)
+
+# Display coordinates of selected point
+if unique_point_count > 0:
+    sel_pt = up_string[selected_index]
+    st.sidebar.markdown(f"**Selected Point:**")
+    st.sidebar.code(f"X: {sel_pt[0]:.2f}\nY: {sel_pt[1]:.2f}\nZ: {sel_pt[2]:.2f}")
+else:
+    st.sidebar.warning("No points in UP string")
+
+
 # Generate Design Button
 if st.sidebar.button("Generate Pit Design", key="btn_gen_pit"):
     if parsing_error:
@@ -145,71 +179,42 @@ if st.sidebar.button("Generate Pit Design", key="btn_gen_pit"):
             design_direction=str(design_direction),
             variable_params=variable_params_list
         )
-        # Store params for later use (e.g. ramp design)
-        st.session_state['design_params'] = params
 
-        benches, diagnostics = pit_design.generate_pit_benches(up_string, params)
-        st.session_state['benches'] = benches
-        st.session_state['diagnostics'] = diagnostics
-        st.session_state['ramp_slices'] = [] # Reset ramp slices
-        st.session_state['ramp_centerline'] = []
-        st.session_state['ramp_corridor'] = None
-
-
-st.sidebar.markdown("---")
-st.sidebar.header("Ramp Design (Beta)")
-
-# Ramp Inputs
-ramp_width = st.sidebar.number_input("Ramp Width (m)", value=20.0, step=1.0)
-ramp_grade = st.sidebar.number_input("Max Grade (%)", value=10.0, step=0.5)
-ramp_z_step = st.sidebar.number_input("Solver Z Step (m)", value=5.0, step=1.0, help="Vertical step size for ramp slices")
-ramp_mode = st.sidebar.selectbox("Ramp Mode", options=["spiral", "switchback"], index=0)
-
-# Start Point Selection
-# We default to using the 'Highlighted Point' from below as the start point x,y
-# And top Z.
-start_pt_idx = 0
-
-if st.sidebar.button("Preview Ramp Slices", key="btn_preview_slices"):
-    if not st.session_state['benches']:
-        st.error("Please generate a pit design first.")
-    elif 'design_params' not in st.session_state:
-         st.error("Design parameters missing. Please regenerate the pit.")
-    else:
+        # Prepare Ramp Params
         ramp_params = design_params.RampParams(
             ramp_width=float(ramp_width),
             grade_max=float(ramp_grade)/100.0,
             z_step=float(ramp_z_step),
             mode=ramp_mode
         )
+
+        # Store params for later use
+        st.session_state['design_params'] = params
         st.session_state['ramp_params'] = ramp_params
 
-        slices = ramp_design.create_slices(
-            st.session_state['benches'],
-            ramp_params,
-            st.session_state['design_params']
+        # Call generation with ramp integration
+        benches, diagnostics = pit_design.generate_pit_benches(
+            up_string,
+            params,
+            ramp_params=ramp_params,
+            ramp_start_index=selected_index
         )
-        st.session_state['ramp_slices'] = slices
-        st.success(f"Generated {len(slices)} slices for ramp preview.")
+
+        st.session_state['benches'] = benches
+        st.session_state['diagnostics'] = diagnostics
+        st.session_state['ramp_slices'] = []
+        st.session_state['ramp_centerline'] = []
+        st.session_state['ramp_corridor'] = None
 
 st.sidebar.markdown("---")
-st.sidebar.header("UP String Inspector")
+st.sidebar.header("Legacy Ramp Tool (Deprecated)")
+st.sidebar.caption("The ramp is now integrated into the pit generation. This tool is for debug only.")
 
-# Index selector
-num_points = len(up_string)
-unique_point_count = num_points - 1 if num_points > 1 and up_string[0] == up_string[-1] else num_points
-
-selected_index = st.sidebar.number_input(
-    "Highlight Point Index",
-    min_value=0,
-    max_value=unique_point_count - 1 if unique_point_count > 0 else 0,
-    value=0,
-    step=1
-)
-
-if st.sidebar.button("Generate Ramp", key="btn_gen_ramp"):
-    if not st.session_state['ramp_slices']:
-         st.error("Please preview ramp slices first to initialize data.")
+if st.sidebar.button("Preview Ramp Slices (Debug)", key="btn_preview_slices"):
+    if not st.session_state['benches']:
+        st.error("Please generate a pit design first.")
+    elif 'design_params' not in st.session_state:
+         st.error("Design parameters missing. Please regenerate the pit.")
     else:
         ramp_params = st.session_state.get('ramp_params')
         if not ramp_params:
@@ -220,35 +225,13 @@ if st.sidebar.button("Generate Ramp", key="btn_gen_ramp"):
                 mode=ramp_mode
             )
 
-        slices = st.session_state['ramp_slices']
-        target_z = float(target_elev) # Same as pit target
-
-        # Get start point from the highlighted index in UP String
-        start_pt_uv = up_string[selected_index]
-        start_point_xy = (start_pt_uv[0], start_pt_uv[1])
-
-        benches = st.session_state['benches']
-        path, diag = ramp_design.solve_ramp(slices, start_point_xy, target_z, ramp_params, benches)
-
-        if path:
-            st.session_state['ramp_centerline'] = path
-            st.success("Ramp generated successfully!")
-
-            # Generate Corridor
-            left, right = ramp_design.generate_ramp_corridor(path, ramp_params.ramp_width)
-            st.session_state['ramp_corridor'] = (left, right)
-
-        else:
-            st.error("Ramp generation failed.")
-            st.json(diag)
-
-# Display coordinates of selected point
-if unique_point_count > 0:
-    sel_pt = up_string[selected_index]
-    st.sidebar.markdown(f"**Selected Point:**")
-    st.sidebar.code(f"X: {sel_pt[0]:.2f}\nY: {sel_pt[1]:.2f}\nZ: {sel_pt[2]:.2f}")
-else:
-    st.sidebar.warning("No points in UP string")
+        slices = ramp_design.create_slices(
+            st.session_state['benches'],
+            ramp_params,
+            st.session_state['design_params']
+        )
+        st.session_state['ramp_slices'] = slices
+        st.success(f"Generated {len(slices)} slices for ramp preview.")
 
 
 st.sidebar.markdown("---")

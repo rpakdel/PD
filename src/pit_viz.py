@@ -132,7 +132,31 @@ def plot_pit_data(
                     flatshading=True
                 ))
 
-            # 3. Plot Crest Lines (Wireframe)
+            # 3. Plot Ramp Mesh
+            if hasattr(bench, 'ramp_mesh') and bench.ramp_mesh and bench.ramp_mesh.vertices:
+                v = bench.ramp_mesh.vertices
+                f = bench.ramp_mesh.faces
+
+                x_v = [p[0] for p in v]
+                y_v = [p[1] for p in v]
+                z_v = [p[2] for p in v]
+
+                i_f = [t[0] for t in f]
+                j_f = [t[1] for t in f]
+                k_f = [t[2] for t in f]
+
+                fig.add_trace(go.Mesh3d(
+                    x=x_v, y=y_v, z=z_v,
+                    i=i_f, j=j_f, k=k_f,
+                    color='goldenrod', # Distinct color for ramp
+                    opacity=1.0,
+                    name=f'Bench {bench.bench_id} Ramp',
+                    showlegend=True,
+                    hoverinfo='skip',
+                    flatshading=True
+                ))
+
+            # 4. Plot Crest Lines (Wireframe)
             if bench.crest_polys:
                 for poly in bench.crest_polys:
                     if not poly.is_empty:
@@ -147,7 +171,7 @@ def plot_pit_data(
                             showlegend=False
                         ))
 
-            # 4. Plot Toe Lines (Wireframe)
+            # 5. Plot Toe Lines (Wireframe)
             if bench.toe_polys:
                 for poly in bench.toe_polys:
                     if not poly.is_empty:
