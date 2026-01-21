@@ -130,7 +130,7 @@ if use_variable_params:
                 parsing_error = True
 
 # Generate Design Button
-if st.sidebar.button("Generate Pit Design"):
+if st.sidebar.button("Generate Pit Design", key="btn_gen_pit"):
     if parsing_error:
         st.error("Please fix errors in the parameter table before generating.")
     elif use_variable_params and not variable_params_list:
@@ -170,7 +170,7 @@ ramp_mode = st.sidebar.selectbox("Ramp Mode", options=["spiral", "switchback"], 
 # And top Z.
 start_pt_idx = 0
 
-if st.sidebar.button("Preview Ramp Slices"):
+if st.sidebar.button("Preview Ramp Slices", key="btn_preview_slices"):
     if not st.session_state['benches']:
         st.error("Please generate a pit design first.")
     elif 'design_params' not in st.session_state:
@@ -192,62 +192,6 @@ if st.sidebar.button("Preview Ramp Slices"):
         st.session_state['ramp_slices'] = slices
         st.success(f"Generated {len(slices)} slices for ramp preview.")
 
-if st.sidebar.button("Generate Ramp"):
-    if not st.session_state['ramp_slices']:
-         st.error("Please preview ramp slices first to initialize data.")
-    else:
-        # Get Start Point
-        # Use highlighted point index or defaults
-        # Assuming we want to start at the top of the pit near a specific point
-        # Let's pick the point from UP string
-
-        # We need to know which index is selected below
-        # Accessing widget state via key might be better, but we are using flow
-        # Let's rely on st.session_state variable if we key it
-        pass # We will get it from the widget below if possible, or defaulting to 0
-
-        # Actually, let's just grab the one from UP string at index 0 for now or add a selector here
-        # But we have one below.
-
-        # To make it robust:
-        # We need x,y from UP string. Z from top slice.
-
-        # Use the slider value if available? Streamlit reruns script, so 'selected_index' variable below is available?
-        # No, execution is top-down. We need to move the slider up or use session state.
-
-        # Let's just default to index 0 for now.
-        start_pt_uv = up_string[0]
-        # We can add a "Start Point Index" input here specifically for ramp
-
-        ramp_params = st.session_state.get('ramp_params')
-        if not ramp_params:
-             ramp_params = design_params.RampParams(
-                ramp_width=float(ramp_width),
-                grade_max=float(ramp_grade)/100.0,
-                z_step=float(ramp_z_step),
-                mode=ramp_mode
-            )
-
-        slices = st.session_state['ramp_slices']
-        target_z = float(target_elev) # Same as pit target
-
-        start_point_xy = (start_pt_uv[0], start_pt_uv[1])
-
-        path, diag = ramp_design.solve_ramp(slices, start_point_xy, target_z, ramp_params)
-
-        if path:
-            st.session_state['ramp_centerline'] = path
-            st.success("Ramp generated successfully!")
-
-            # Generate Corridor
-            left, right = ramp_design.generate_ramp_corridor(path, ramp_params.ramp_width)
-            st.session_state['ramp_corridor'] = (left, right)
-
-        else:
-            st.error("Ramp generation failed.")
-            st.json(diag)
-
-
 st.sidebar.markdown("---")
 st.sidebar.header("UP String Inspector")
 
@@ -262,6 +206,41 @@ selected_index = st.sidebar.number_input(
     value=0,
     step=1
 )
+
+if st.sidebar.button("Generate Ramp", key="btn_gen_ramp"):
+    if not st.session_state['ramp_slices']:
+         st.error("Please preview ramp slices first to initialize data.")
+    else:
+        ramp_params = st.session_state.get('ramp_params')
+        if not ramp_params:
+             ramp_params = design_params.RampParams(
+                ramp_width=float(ramp_width),
+                grade_max=float(ramp_grade)/100.0,
+                z_step=float(ramp_z_step),
+                mode=ramp_mode
+            )
+
+        slices = st.session_state['ramp_slices']
+        target_z = float(target_elev) # Same as pit target
+
+        # Get start point from the highlighted index in UP String
+        start_pt_uv = up_string[selected_index]
+        start_point_xy = (start_pt_uv[0], start_pt_uv[1])
+
+        benches = st.session_state['benches']
+        path, diag = ramp_design.solve_ramp(slices, start_point_xy, target_z, ramp_params, benches)
+
+        if path:
+            st.session_state['ramp_centerline'] = path
+            st.success("Ramp generated successfully!")
+
+            # Generate Corridor
+            left, right = ramp_design.generate_ramp_corridor(path, ramp_params.ramp_width)
+            st.session_state['ramp_corridor'] = (left, right)
+
+        else:
+            st.error("Ramp generation failed.")
+            st.json(diag)
 
 # Display coordinates of selected point
 if unique_point_count > 0:
