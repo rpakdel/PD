@@ -38,6 +38,7 @@ class BenchGeometry:
     toe_polys: List[sg.Polygon] = field(default_factory=list)
     face_mesh: Mesh3D = field(default_factory=Mesh3D)
     berm_mesh: Mesh3D = field(default_factory=Mesh3D)
+    ramp_mesh: Mesh3D = field(default_factory=Mesh3D)
     diagnostics: List[str] = field(default_factory=list)
 
 @dataclass

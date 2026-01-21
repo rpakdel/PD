@@ -3,7 +3,8 @@ from typing import List, Tuple, Dict, Any, Union, Optional
 import shapely.geometry as sg
 import shapely.ops as so
 import pyclipper
-from design_params import DesignBlock, PitDesignParams, Mesh3D, BenchGeometry
+from design_params import DesignBlock, PitDesignParams, Mesh3D, BenchGeometry, RampParams
+from ramp_geometry import RampGenerator
 
 # Integer scaling for Clipper robustness
 SCALE = 1000
@@ -316,7 +317,9 @@ def mesh_from_polygon_difference(
 
 def generate_pit_benches(
     up_points: List[Tuple[float, float, float]],
-    params: PitDesignParams
+    params: PitDesignParams,
+    ramp_params: Optional[RampParams] = None,
+    ramp_start_index: int = 0
 ) -> Tuple[List[BenchGeometry], Dict[str, Any]]:
     """
     Generates pit benches and surfaces.
@@ -339,6 +342,15 @@ def generate_pit_benches(
 
     if not up_poly.is_valid:
         up_poly = up_poly.buffer(0)
+
+    # Initialize Ramp Generator if params provided
+    ramp_gen = None
+    if ramp_params:
+        ramp_gen = RampGenerator(ramp_params)
+        # Find start point on UP ring
+        # Use index if valid, else 0
+        idx = ramp_start_index % len(poly_coords)
+        ramp_gen.set_start_point(poly_coords[idx])
 
     # 3. Ensure consistent orientation is handled by to_clipper automatically
 
@@ -391,6 +403,22 @@ def generate_pit_benches(
                 if not crest_polys_list:
                     continue
 
+                # Apply Ramp Cut (Upward)
+                # For Upward, we are filling. Ramp adds to the fill? Or cuts into the fill?
+                # Assuming Ramp is a road on the side of the fill (Dump).
+                # It adds volume (expands the crest).
+                if ramp_gen:
+                    # Select largest crest if multiple (heuristic)
+                    # For Upward, we usually have one main dump body.
+                    ramp_target_poly = max(crest_polys_list, key=lambda p: p.area)
+                    ramp_poly, _, ramp_mesh = ramp_gen.generate_ramp_segment(
+                        ramp_target_poly, current_toe_z, current_crest_z, ramp_params.grade_max
+                    )
+                    # Union ramp to crests
+                    crest_polys_list = [p.union(ramp_poly) for p in crest_polys_list]
+                    bench_geom.ramp_mesh.extend(ramp_mesh)
+
+
                 bench_geom.crest_polys.extend(crest_polys_list)
 
                 # Mesh Face
@@ -415,10 +443,6 @@ def generate_pit_benches(
             benches.append(bench_geom)
 
             # PoC rule: keep largest?
-            # For Upward, we might merge multiple pits. We keep all clean polys.
-            # If user insisted on "largest", we would filter here.
-            # But "Upward" usually implies filling a void, so merging is natural.
-
             current_toe_polys = clean_polygons(next_level_toe_polys)
 
             # Stats
@@ -482,12 +506,40 @@ def generate_pit_benches(
             for poly in current_crest_polys:
                 bench_geom.crest_polys.append(poly)
                 toe_polys_list = inset_polygon(poly, h_face)
+
+                # RAMP INTEGRATION
+                if ramp_gen:
+                    # We are going Downward.
+                    # Ramp travels from Crest (current_crest_z) to Toe (current_toe_z).
+                    # We need to cut the ramp into the "Toe Polygon".
+                    # Normal Toe Polygon is 'poly' inset by 'h_face'.
+                    # Ramp Polygon expands this hole.
+
+                    # We trace along 'poly' (the Crest).
+                    # Actually, the ramp runs along the wall. The wall starts at Crest.
+                    ramp_poly, _, ramp_mesh = ramp_gen.generate_ramp_segment(
+                        poly, current_crest_z, current_toe_z, ramp_params.grade_max
+                    )
+
+                    # Merge ramp_poly into toe_polys
+                    # Since toe_polys are Holes (Void), and Ramp is Void, we Union.
+                    if toe_polys_list:
+                         toe_polys_list = [p.union(ramp_poly) for p in toe_polys_list]
+                         bench_geom.ramp_mesh.extend(ramp_mesh)
+                    else:
+                         # If no toe (e.g. pinch out), the ramp might still exist?
+                         # Usually if pinch out, pit ends. But ramp might extend slightly.
+                         # For now, if no toe, no ramp integration.
+                         pass
+
                 if not toe_polys_list:
                     continue
 
                 bench_geom.toe_polys.extend(toe_polys_list)
 
                 # Mesh Face
+                # Face is Difference(Crest, Toe).
+                # Since Toe is now larger (includes Ramp), the Face will have a slot cut out.
                 face_mesh = mesh_from_polygon_difference(
                     poly, toe_polys_list, current_crest_z, current_toe_z
                 )
@@ -495,6 +547,35 @@ def generate_pit_benches(
 
                 for toe_poly in toe_polys_list:
                     next_crests = inset_polygon(toe_poly, bw)
+
+                    # Note: We do NOT add ramp to next_crests (Berm level).
+                    # The ramp usually traverses the Face.
+                    # On the Berm, the ramp continues?
+                    # "Project to Next Bench... Repeat".
+                    # The `ramp_gen` maintains state (end point).
+                    # The next iteration (next bench) will pick up from the end point.
+                    # But between Toe and Next Crest is a Berm.
+                    # Does the ramp travel across the Berm?
+                    # Usually Ramp is continuous.
+                    # If Berm Width > 0, the ramp must cross it.
+                    # BUT `ramp_gen` generated a segment for `h_bench` drop.
+                    # The distance travelled covers the Face drop.
+                    # If we have a flat Berm, does the ramp drop? No, it's flat?
+                    # "Ensure the switchback has a 'flat' section".
+                    # Usually the ramp continues descending.
+                    # If the ramp continues descending across the berm width, we need to handle that.
+                    # However, in this simplified model:
+                    # We treat (Face + Berm) as one step?
+                    # Or we just assume the Ramp logic handles the vertical drop across the face.
+                    # Let's assume the Ramp is "Face-only" for now, or that the Berm is cut by the next iteration's start?
+
+                    # Issue: The ramp end point is at the Toe.
+                    # The next ramp segment starts at the Toe?
+                    # If there is a Berm, the next Crest is "inward".
+                    # The Ramp End Point (at Toe) is "outward" (on the ramp cut).
+                    # So the next iteration will start from that outward point.
+                    # And trace along the Toe (which includes the ramp cut).
+                    # So it should naturally work!
 
                     berm_mesh = mesh_from_polygon_difference(
                         toe_poly, next_crests, current_toe_z, current_toe_z
@@ -505,9 +586,6 @@ def generate_pit_benches(
             benches.append(bench_geom)
 
             # PoC Rule: Keep Largest (Downward split handling)
-            # Agents.md: "PoC rule: select the largest-area polygon... store others as 'discarded'"
-            # We implement this here.
-
             candidates = clean_polygons(next_level_crest_polys)
             if candidates:
                 # Select largest
