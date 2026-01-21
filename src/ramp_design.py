@@ -235,12 +235,9 @@ def solve_ramp(
     is_downward = (target_z < start_z_surf)
     grade_factor = -1.0 if is_downward else 1.0
 
-    # Determine average batter angle for Ideal Offset estimation
-    # Just take params at top Z?
-    # Better: get angle at current Z.
-    # We will approximate inside loop or pre-fetch a representative angle.
-    # Let's assume uniform 75 deg for heuristic to save time, or look up.
-    # Using specific angle at each depth is better.
+    # Surface Z cache to avoid expensive re-calculations
+    # Key: (r, c), Value: z_ground
+    z_cache = {}
 
     while open_set:
         current = heapq.heappop(open_set)
@@ -291,39 +288,40 @@ def solve_ramp(
             # 1. Distance Cost
             move_cost = step_dist
 
-            # 2. Wall Following Penalty
-            # Ideal offset from Top Crest at depth Z
-            # depth = top_z - new_z (if Downward)
-            # offset = depth / tan(angle)
-
-            # Get angle at new_z
-            # Use default or lookup
-            # We don't have direct access to params object easily here unless we pass it or assume constant.
-            # But get_z_at_xy uses benches.
-            # We can infer from benches structure or just use a fixed heuristic weight.
-            # Let's assume ~75 degrees or derive from bench.
-
-            # Better: Calculate distance to 'Top Crest' boundary
-            dist_to_crest = top_poly.boundary.distance(p_geom)
-
-            # Calculate Ideal Distance
-            if is_downward:
-                depth = top_z - new_z
+            # 2. Surface Proximity Cost (Wall Following)
+            # Retrieve or compute Ground Z at this location
+            if (nr, nc) in z_cache:
+                z_ground = z_cache[(nr, nc)]
             else:
-                depth = abs(new_z - start_z_surf) # Approx for Upward?
+                z_ground = get_z_at_xy(px, py, benches)
+                z_cache[(nr, nc)] = z_ground
 
-            # Assume 75 deg (approx 3.73 tan)
-            # ideal_dist = depth / tan(75) approx depth / 3.73
-            ideal_dist = depth / 3.73
+            # If outside pit model (z_ground is None), penalize heavily or block
+            # (Note: top_poly check above handles most cases, but get_z_at_xy is more precise)
+            if z_ground is None:
+                continue
 
-            deviation = abs(dist_to_crest - ideal_dist)
+            # Calculate difference between Ramp Design Z and Pit Surface Z
+            z_diff = new_z - z_ground
 
-            # Penalty Weight
-            # Deviation in meters.
-            # If deviation is large, we are far from "Wall".
-            # Penalty = deviation * weight
-            WALL_WEIGHT = 2.0
-            move_cost += deviation * WALL_WEIGHT
+            # Penalty weights
+            # Fill (Ramp in air, z_diff > 0 for Downward pit? No, z_ground is surface)
+            # If Z increases Upward:
+            #   Surface = 100. Ramp = 110. (Air/Fill).
+            #   Surface = 100. Ramp = 90. (Ground/Cut).
+            # We want to minimize deviation from surface.
+
+            # Prefer Cut over Fill?
+            # Cut (z_ramp < z_ground) is standard.
+            # Fill (z_ramp > z_ground) is a bridge.
+
+            FILL_WEIGHT = 10.0
+            CUT_WEIGHT = 1.0 # Allow cuts, but try to stay close to surface
+
+            if z_diff > 0: # Above ground (Fill)
+                move_cost += z_diff * FILL_WEIGHT
+            else: # Below ground (Cut)
+                move_cost += abs(z_diff) * CUT_WEIGHT
 
             new_g = current.g_cost + move_cost
 
