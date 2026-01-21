@@ -2,7 +2,11 @@ import math
 from typing import List, Tuple, Dict, Any, Union, Optional
 import shapely.geometry as sg
 import shapely.ops as so
+import pyclipper
 from design_params import DesignBlock, PitDesignParams, Mesh3D, BenchGeometry
+
+# Integer scaling for Clipper robustness
+SCALE = 1000
 
 def get_design_params_at_elevation(z: float, params: PitDesignParams) -> Tuple[float, float]:
     """
@@ -22,43 +26,98 @@ def get_design_params_at_elevation(z: float, params: PitDesignParams) -> Tuple[f
 
     return params.batter_angle_deg, params.berm_width
 
-def clean_polygons(polys: List[sg.Polygon]) -> List[sg.Polygon]:
+def to_clipper(poly: sg.Polygon) -> List[List[Tuple[int, int]]]:
     """
-    Cleans a list of polygons by performing a unary_union.
-    This handles merging overlapping polygons and simplifying topology.
-    Returns a list of disjoint Polygons.
+    Converts a Shapely Polygon to a list of Clipper paths (scaled integers).
+    Ensures Outer is CCW and Holes are CW (standard for pyclipper Offset with Holes?).
+    Wait, pyclipper docs say: "Outer polygons should be defined by a clockwise vertex order".
+    BUT PyclipperOffset docs say: "Positive offsets expand outer polygons and contract inner polygons."
+    My experiments showed:
+    - Input CCW Outer -> Positive Offset Expands.
+    - Input CW Hole -> Positive Offset Contracts (Shrinks hole).
+
+    So we want:
+    - Outer: CCW (Orientation True)
+    - Hole: CW (Orientation False)
+
+    Shapely 2.0:
+    - exterior is CCW.
+    - interiors are CCW.
+
+    So we keep Exterior as is (CCW).
+    We REVERSE Interiors to be CW.
     """
-    if not polys:
+    paths = []
+
+    # Exterior
+    ext_coords = list(poly.exterior.coords)
+    # Remove last point if duplicate (Shapely is closed, Clipper takes open list of points implies closed)
+    if ext_coords[0] == ext_coords[-1]:
+        ext_coords.pop()
+
+    ext_scaled = [(int(round(x * SCALE)), int(round(y * SCALE))) for x, y in ext_coords]
+
+    # Ensure CCW for Exterior (Area > 0)
+    # pyclipper.Orientation(True) = CCW
+    if not pyclipper.Orientation(ext_scaled):
+        ext_scaled.reverse()
+
+    paths.append(ext_scaled)
+
+    # Interiors
+    for interior in poly.interiors:
+        int_coords = list(interior.coords)
+        if int_coords[0] == int_coords[-1]:
+            int_coords.pop()
+
+        int_scaled = [(int(round(x * SCALE)), int(round(y * SCALE))) for x, y in int_coords]
+
+        # Ensure CW for Hole (Area < 0 implies Orientation False)
+        if pyclipper.Orientation(int_scaled):
+            int_scaled.reverse()
+
+        paths.append(int_scaled)
+
+    return paths
+
+def from_clipper(paths: List[List[Tuple[int, int]]]) -> List[sg.Polygon]:
+    """
+    Converts a list of Clipper paths back to Shapely Polygons.
+    Uses Orientation to distinguish Outer (CCW) from Holes (CW).
+    Reconstructs parent-child relationships for holes.
+    """
+    if not paths:
         return []
 
-    # Filter out invalid or empty
-    valid_polys = [p for p in polys if not p.is_empty and p.is_valid]
-    if not valid_polys:
+    # Separate Shells (CCW) and Holes (CW)
+    shells = []
+    holes = []
+
+    for path in paths:
+        # Convert back to float
+        coords = [(x / SCALE, y / SCALE) for x, y in path]
+        if len(coords) < 3:
+            continue
+
+        # Orientation: True=CCW (Shell), False=CW (Hole)
+        if pyclipper.Orientation(path):
+            shells.append(sg.Polygon(coords))
+        else:
+            holes.append(sg.Polygon(coords))
+
+    if not shells:
         return []
 
-    merged = so.unary_union(valid_polys)
+    # We use Shapely to subtract holes from shells
+    # Union all shells
+    shell_union = so.unary_union(shells)
 
-    if merged.is_empty:
-        return []
-
-    if isinstance(merged, sg.MultiPolygon):
-        return list(merged.geoms)
-    elif isinstance(merged, sg.Polygon):
-        return [merged]
+    if holes:
+        hole_union = so.unary_union(holes)
+        # Difference
+        res = shell_union.difference(hole_union)
     else:
-        # GeometryCollection or other (shouldn't happen with polygons input)
-        return []
-
-def offset_polygon(poly: sg.Polygon, distance: float) -> List[sg.Polygon]:
-    """
-    Offsets a polygon by a given distance.
-    Positive distance expands, negative distance shrinks (insets).
-    Returns a list of Polygons (handles splits/merges).
-    """
-    if not poly.is_valid:
-        poly = poly.buffer(0)
-
-    res = poly.buffer(distance, join_style='mitre')
+        res = shell_union
 
     if res.is_empty:
         return []
@@ -69,6 +128,106 @@ def offset_polygon(poly: sg.Polygon, distance: float) -> List[sg.Polygon]:
         return [res]
     else:
         return []
+
+def remove_spikes(poly: sg.Polygon, eps: float = 0.01) -> sg.Polygon:
+    """
+    Removes vertices that are closer than eps to the previous vertex.
+    """
+    if poly.is_empty:
+        return poly
+
+    def filter_coords(coords):
+        if not coords:
+            return []
+        new_coords = [coords[0]]
+        for i in range(1, len(coords)):
+            p = coords[i]
+            prev = new_coords[-1]
+            dist = math.sqrt((p[0]-prev[0])**2 + (p[1]-prev[1])**2)
+            if dist > eps:
+                new_coords.append(p)
+        # Check closure
+        if len(new_coords) > 2:
+            # Check last against first
+             p = new_coords[-1]
+             first = new_coords[0]
+             dist = math.sqrt((p[0]-first[0])**2 + (p[1]-first[1])**2)
+             if dist <= eps: # Close enough to close
+                 new_coords.pop()
+                 new_coords.append(first)
+             elif new_coords[0] != new_coords[-1]:
+                 new_coords.append(first)
+        return new_coords
+
+    ext = filter_coords(list(poly.exterior.coords))
+    if len(ext) < 4: # Triangle is 4 points (closed)
+        return sg.Polygon() # Collapsed
+
+    interiors = []
+    for inner in poly.interiors:
+        inner_coords = filter_coords(list(inner.coords))
+        if len(inner_coords) >= 4:
+            interiors.append(inner_coords)
+
+    return sg.Polygon(ext, interiors).buffer(0)
+
+def clean_polygons(polys: List[sg.Polygon]) -> List[sg.Polygon]:
+    """
+    Cleans a list of polygons by performing a Union using Clipper.
+    """
+    if not polys:
+        return []
+
+    valid_polys = [p for p in polys if not p.is_empty and p.is_valid]
+    if not valid_polys:
+        return []
+
+    pc = pyclipper.Pyclipper()
+
+    for p in valid_polys:
+        paths = to_clipper(p)
+        pc.AddPaths(paths, pyclipper.PT_SUBJECT, True)
+
+    # Execute Union
+    # PFT_NONZERO is standard
+    try:
+        solution = pc.Execute(pyclipper.CT_UNION, pyclipper.PFT_NONZERO, pyclipper.PFT_NONZERO)
+    except Exception:
+        # Fallback to shapely if clipper fails
+        merged = so.unary_union(valid_polys)
+        if isinstance(merged, sg.MultiPolygon):
+            return list(merged.geoms)
+        elif isinstance(merged, sg.Polygon):
+            return [merged]
+        return []
+
+    return from_clipper(solution)
+
+
+def offset_polygon(poly: sg.Polygon, distance: float) -> List[sg.Polygon]:
+    """
+    Offsets a polygon by a given distance using Clipper.
+    Positive distance expands, negative distance shrinks (insets).
+    """
+    if not poly.is_valid:
+        poly = poly.buffer(0)
+
+    if poly.is_empty:
+        return []
+
+    pco = pyclipper.PyclipperOffset()
+
+    paths = to_clipper(poly)
+    pco.AddPaths(paths, pyclipper.JT_MITER, pyclipper.ET_CLOSEDPOLYGON)
+
+    dist_scaled = distance * SCALE
+
+    try:
+        solution = pco.Execute(dist_scaled)
+    except Exception:
+        return []
+
+    return from_clipper(solution)
 
 def inset_polygon(poly: sg.Polygon, distance: float) -> List[sg.Polygon]:
     """
@@ -86,75 +245,58 @@ def mesh_from_polygon_difference(
     """
     Generates a 3D mesh for the area between outer_poly and inner_polys.
     """
-    # 1. Create the difference polygon (surface with holes)
-    # Union inner polygons first
     if not inner_polys:
-        # If no inner polygons (e.g. bottom of pit), maybe we just mesh the outer?
-        # But usually this function is called for Face (Crest-Toe) or Berm (Toe-Crest).
-        # If inner is empty, it means the offset collapsed.
-        # We can mesh the whole outer polygon (cap).
         diff_poly = outer_poly
     else:
-        inner_union = sg.MultiPolygon(inner_polys).buffer(0) # clean union
-        diff_poly = outer_poly.difference(inner_union)
+        # Use Clipper for difference to be consistent
+        pc = pyclipper.Pyclipper()
+        outer_paths = to_clipper(outer_poly)
+        pc.AddPaths(outer_paths, pyclipper.PT_SUBJECT, True)
+
+        for p in inner_polys:
+            inner_paths = to_clipper(p)
+            pc.AddPaths(inner_paths, pyclipper.PT_CLIP, True)
+
+        try:
+            solution = pc.Execute(pyclipper.CT_DIFFERENCE, pyclipper.PFT_NONZERO, pyclipper.PFT_NONZERO)
+            diff_polys = from_clipper(solution)
+        except Exception:
+            diff_polys = []
+
+        if not diff_polys:
+            return Mesh3D()
+
+        diff_poly = sg.MultiPolygon(diff_polys)
 
     if diff_poly.is_empty:
         return Mesh3D()
 
-    # 2. Triangulate
-    # shapely.ops.triangulate triangulates the vertices of the geometry
     triangles = so.triangulate(diff_poly)
-
-    # 3. Filter triangles that are strictly inside the difference polygon
-    # Use representative_point() or centroid
     valid_triangles = [t for t in triangles if diff_poly.contains(t.centroid)]
 
     if not valid_triangles:
         return Mesh3D()
 
-    # 4. Build Mesh3D
-    # We need to map (x,y) to indices and determine Z
-    vertices_map = {} # (x,y) -> index
+    vertices_map = {}
     vertices_list = []
     faces_list = []
 
     def get_vertex_index(x, y):
-        # Rounding to handle float precision issues
         key = (round(x, 6), round(y, 6))
         if key not in vertices_map:
-            # Determine Z
             pt = sg.Point(x, y)
-
-            # Simple distance check
-            # Note: Boundary of MultiPolygon might be complex
             d_outer = outer_poly.boundary.distance(pt)
-
-            # Distance to inner boundaries
             d_inner = float('inf')
             if inner_polys:
-                 # Check against original inner list boundaries
                  d_inner = min(p.boundary.distance(pt) for p in inner_polys)
 
             if d_inner == float('inf'):
-                 # No inner, must be on outer or inside (cap)
-                 # If it's a cap, maybe we want it flat at z_outer?
-                 z = z_outer # Or z_inner if we are closing bottom?
-                 # If this is "Face" and inner collapsed, it's a pinch out.
-                 # Usually we pinch out to z_toe.
-                 # Let's assume cap at z_outer?
                  z = z_outer
             else:
-                # Interpolate Z
                 total_d = d_outer + d_inner
                 if total_d < 1e-6:
-                     # On boundary or very close
                      z = z_outer if d_outer < d_inner else z_inner
                 else:
-                     # Linear interpolation
-                     ratio = d_inner / total_d # Closer to outer (d_outer small) -> ratio close to 0 -> ???
-                     # Wait. If close to outer, d_outer is 0. We want Z_outer.
-                     # Formula: z = z_outer * (d_inner/total) + z_inner * (d_outer/total)
-                     # Check: if d_outer=0 -> z = z_outer * 1 + z_inner * 0 = z_outer. Correct.
                      z = z_outer * (d_inner / total_d) + z_inner * (d_outer / total_d)
 
             vertices_map[key] = len(vertices_list)
@@ -164,9 +306,6 @@ def mesh_from_polygon_difference(
 
     for tri in valid_triangles:
         coords = list(tri.exterior.coords)
-        # coords has 4 points (closed loop), take first 3
-        # Check winding? Shapely triangles are usually CCW?
-        # We'll take first 3.
         idx0 = get_vertex_index(coords[0][0], coords[0][1])
         idx1 = get_vertex_index(coords[1][0], coords[1][1])
         idx2 = get_vertex_index(coords[2][0], coords[2][1])
@@ -185,19 +324,28 @@ def generate_pit_benches(
     if not up_points:
         return [], {"error": "No UP points provided"}
 
-    # Initial Crest (UP)
+    # Pre-process UP ring
     avg_z = sum(p[2] for p in up_points) / len(up_points)
     poly_coords = [(p[0], p[1]) for p in up_points]
+
+    # 1. Close ring
+    if poly_coords[0] != poly_coords[-1]:
+        poly_coords.append(poly_coords[0])
+
     up_poly = sg.Polygon(poly_coords)
+
+    # 2. Remove spikes (eps=0.01)
+    up_poly = remove_spikes(up_poly, eps=0.01)
 
     if not up_poly.is_valid:
         up_poly = up_poly.buffer(0)
+
+    # 3. Ensure consistent orientation is handled by to_clipper automatically
 
     benches = []
     bench_id = 1
 
     if params.design_direction == "Upward":
-        # Upward generation: UP string is Toe of bottom bench
         current_toe_polys = [up_poly]
         current_toe_z = avg_z
 
@@ -213,7 +361,6 @@ def generate_pit_benches(
             diagnostics["bench_log"].append(msg)
             return [], diagnostics
 
-        # We loop while we are below the target elevation (assuming target is Top)
         while current_toe_z < params.target_elevation:
             current_crest_z = current_toe_z + params.bench_height
             z_mid = (current_toe_z + current_crest_z) / 2.0
@@ -236,87 +383,50 @@ def generate_pit_benches(
                 z_toe=current_toe_z
             )
 
-            # We need to collect next level toes (for next iteration)
             next_level_toe_polys = []
 
-            # 1. Process Faces (Toe -> Crest) - Expansion
             for poly in current_toe_polys:
                 bench_geom.toe_polys.append(poly)
-
-                # Expand Toe to Crest
-                # Use offset_polygon with positive distance
                 crest_polys_list = offset_polygon(poly, h_face)
-
                 if not crest_polys_list:
-                    # Should not happen with positive buffer unless geometry invalid
                     continue
 
                 bench_geom.crest_polys.extend(crest_polys_list)
 
-                # Mesh Face (Crest - Toe)
-                # Outer = Crest (High Z), Inner = Toe (Low Z)
-                # Note: mesh_from_polygon_difference(outer, inner, z_outer, z_inner)
-                # For each crest polygon resulting from this toe, we mesh the difference.
-                # However, offset_polygon might merge or split.
-                # Ideally we mesh the area between 'poly' (Toe) and 'crest_polys_list'.
-                # But 'crest_polys_list' is the outer boundary.
-                # We need to map which crest corresponds to which toe?
-                # Actually, simpliest is: Mesh (Union(Crests) - Toe).
-                # But we handle one 'poly' (Toe) at a time.
-                # The 'crest_polys_list' is the expansion of *this* toe poly.
-                # So the difference between Union(crest_polys_list) and poly is the face.
+                # Mesh Face
+                # Use clean union for crests derived from this toe
+                crest_union = clean_polygons(crest_polys_list)
 
-                # Union of crests for this toe (usually just one, but buffer handles topology)
-                crest_union = so.unary_union(crest_polys_list)
-                if isinstance(crest_union, sg.Polygon):
-                    crests_for_mesh = [crest_union]
-                elif isinstance(crest_union, sg.MultiPolygon):
-                    crests_for_mesh = list(crest_union.geoms)
-                else:
-                    crests_for_mesh = [] # Empty?
-
-                # We want to mesh the area: Crests - Toe
-                # So outer = Crests, inner = Toe.
-                # Since mesh_from_polygon_difference takes one outer and list of inners,
-                # we iterate over crests.
-
-                for crest_poly in crests_for_mesh:
+                for crest_poly in crest_union:
                     face_mesh = mesh_from_polygon_difference(
                         crest_poly, [poly], current_crest_z, current_toe_z
                     )
                     bench_geom.face_mesh.extend(face_mesh)
 
-                # 2. Process Berms (Crest -> Next Toe)
                 for crest_poly in crest_polys_list:
                     next_toes = offset_polygon(crest_poly, bw)
-
-                    # Mesh Berm (Next Toe - Crest)
-                    # Berm is flat at current_crest_z?
-                    # Wait, in downward: Berm is between Toe and Next Crest at z_toe.
-                    # In Upward: Berm is between Crest and Next Toe at z_crest.
-
-                    # Next Toes (Outer) - Crest (Inner)
                     for next_toe in next_toes:
                         berm_mesh = mesh_from_polygon_difference(
                             next_toe, [crest_poly], current_crest_z, current_crest_z
                         )
                         bench_geom.berm_mesh.extend(berm_mesh)
-
                     next_level_toe_polys.extend(next_toes)
 
             benches.append(bench_geom)
 
-            # Diagnostic stats
+            # PoC rule: keep largest?
+            # For Upward, we might merge multiple pits. We keep all clean polys.
+            # If user insisted on "largest", we would filter here.
+            # But "Upward" usually implies filling a void, so merging is natural.
+
+            current_toe_polys = clean_polygons(next_level_toe_polys)
+
+            # Stats
             total_crest_area = sum(p.area for p in bench_geom.crest_polys)
-            total_toe_area = sum(p.area for p in bench_geom.toe_polys)
             diagnostics["bench_log"].append(
-                f"Bench {bench_id}: {len(bench_geom.crest_polys)} crests ({total_crest_area:.0f} m2), "
-                f"{len(bench_geom.toe_polys)} toes ({total_toe_area:.0f} m2)."
+                f"Bench {bench_id}: {len(bench_geom.crest_polys)} crests ({total_crest_area:.0f} m2)"
             )
 
-            # CLEAN UP and MERGE for next iteration
-            # This is crucial for Upward to merge expanding bubbles
-            current_toe_polys = clean_polygons(next_level_toe_polys)
             current_toe_z = current_crest_z
             bench_id += 1
 
@@ -325,8 +435,7 @@ def generate_pit_benches(
                 break
 
     else:
-        # Downward generation (Default)
-        # Active polygons for current crest level
+        # Downward
         current_crest_polys = [up_poly]
         current_crest_z = avg_z
 
@@ -368,18 +477,12 @@ def generate_pit_benches(
                 z_toe=current_toe_z
             )
 
-            # We need to collect next level crests
             next_level_crest_polys = []
 
-            # 1. Process Faces (Crest -> Toe)
             for poly in current_crest_polys:
                 bench_geom.crest_polys.append(poly)
-
-                # Generate Toes
                 toe_polys_list = inset_polygon(poly, h_face)
-
                 if not toe_polys_list:
-                    # Pit pinched out at this face
                     continue
 
                 bench_geom.toe_polys.extend(toe_polys_list)
@@ -390,32 +493,38 @@ def generate_pit_benches(
                 )
                 bench_geom.face_mesh.extend(face_mesh)
 
-                # 2. Process Berms (Toe -> Next Crest)
                 for toe_poly in toe_polys_list:
                     next_crests = inset_polygon(toe_poly, bw)
 
-                    # Mesh Berm (flat)
                     berm_mesh = mesh_from_polygon_difference(
                         toe_poly, next_crests, current_toe_z, current_toe_z
                     )
                     bench_geom.berm_mesh.extend(berm_mesh)
-
                     next_level_crest_polys.extend(next_crests)
 
             benches.append(bench_geom)
 
-            # Diagnostic stats
+            # PoC Rule: Keep Largest (Downward split handling)
+            # Agents.md: "PoC rule: select the largest-area polygon... store others as 'discarded'"
+            # We implement this here.
+
+            candidates = clean_polygons(next_level_crest_polys)
+            if candidates:
+                # Select largest
+                largest = max(candidates, key=lambda p: p.area)
+                if len(candidates) > 1:
+                    discarded = len(candidates) - 1
+                    diagnostics["bench_log"].append(f"Bench {bench_id}: kept largest polygon, discarded {discarded} smaller components.")
+                current_crest_polys = [largest]
+            else:
+                current_crest_polys = []
+
+            # Stats
             total_crest_area = sum(p.area for p in bench_geom.crest_polys)
-            total_toe_area = sum(p.area for p in bench_geom.toe_polys)
             diagnostics["bench_log"].append(
-                f"Bench {bench_id}: {len(bench_geom.crest_polys)} crests ({total_crest_area:.0f} m2), "
-                f"{len(bench_geom.toe_polys)} toes ({total_toe_area:.0f} m2)."
+                f"Bench {bench_id}: {len(bench_geom.crest_polys)} crests ({total_crest_area:.0f} m2)"
             )
 
-            # CLEAN UP and MERGE/SPLIT cleanly for next iteration
-            # Even for downward, this simplifies topology (e.g. if islands merge - though unlikely in shrinkage)
-            # But it ensures valid geometry.
-            current_crest_polys = clean_polygons(next_level_crest_polys)
             current_crest_z = current_toe_z
             bench_id += 1
 
